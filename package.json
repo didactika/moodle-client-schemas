@@ -1,0 +1,74 @@
+{
+  "name": "@didactika/moodle-client-schemas",
+  "version": "0.1.0",
+  "description": "Typed client and JSON schemas for Moodle LMS Web Services API",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "jest",
+    "test:unit": "jest --testPathPattern=test/unit",
+    "test:coverage": "jest --coverage",
+    "prepublishOnly": "npm run lint && npm run typecheck && npm run test && npm run build"
+  },
+  "keywords": [
+    "didactika",
+    "moodle",
+    "moodle-api",
+    "webservice",
+    "schemas",
+    "lms",
+    "client"
+  ],
+  "author": "Didactika <info@didactika.org>",
+  "contributors": [
+    "Eduardo Cubias <eduardocubiasm@gmail.com>",
+    "Hector Arrechea <hectorlazaroarrechea@gmail.com>"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/didactika/moodle-client-schemas.git"
+  },
+  "homepage": "https://github.com/didactika/moodle-client-schemas#readme",
+  "bugs": {
+    "url": "https://github.com/didactika/moodle-client-schemas/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "p-limit": "^7.3.1",
+    "php-parser": "^3.7.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.20.0",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.13.4",
+    "@typescript-eslint/eslint-plugin": "^8.24.0",
+    "@typescript-eslint/parser": "^8.24.0",
+    "eslint": "^9.20.1",
+    "jest": "^29.7.0",
+    "prettier": "^3.5.1",
+    "ts-jest": "^29.2.5",
+    "tsup": "^8.3.6",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.24.0"
+  }
+}
