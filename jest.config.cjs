@@ -6,7 +6,7 @@ module.exports = {
       preset: 'ts-jest',
       testEnvironment: 'node',
       transform: {
-        '^.+\\.tsx?$': ['ts-jest', { tsconfig: 'tsconfig.json' }]
+        '^.+\\.[tj]sx?$': ['ts-jest', { tsconfig: 'tsconfig.json' }]
       },
       transformIgnorePatterns: ['/node_modules/(?!(p-limit|yocto-queue)/)'],
       modulePathIgnorePatterns: ['<rootDir>/src/tmp/', '<rootDir>/tmp/']
@@ -17,7 +17,7 @@ module.exports = {
       preset: 'ts-jest',
       testEnvironment: 'node',
       transform: {
-        '^.+\\.tsx?$': ['ts-jest', { tsconfig: 'tsconfig.json' }]
+        '^.+\\.[tj]sx?$': ['ts-jest', { tsconfig: 'tsconfig.json' }]
       },
       transformIgnorePatterns: ['/node_modules/(?!(p-limit|yocto-queue)/)'],
       modulePathIgnorePatterns: ['<rootDir>/src/tmp/', '<rootDir>/tmp/']
