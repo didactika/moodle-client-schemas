@@ -37,14 +37,12 @@ describe('Unit Test: service-extractor', () => {
                 {
                     name: 'aiplacement_editor_generate_image',
                     classname: '\\aiplacement_editor\\external\\generate_image',
-                    methodname: 'execute',
-                    description: 'Generate image for the HTML Text editor AI Placement'
+                    methodname: 'execute'
                 },
                 {
                     name: 'aiplacement_editor_generate_text',
                     classname: '\\aiplacement_editor\\external\\generate_text',
                     methodname: 'execute',
-                    description: 'Generate text for the HTML Text editor AI Placement'
                 }
             ]);
         });
@@ -67,9 +65,57 @@ describe('Unit Test: service-extractor', () => {
                 }
             ]);
         });
+
+        it('should extract custom explicit methodname when declared', () => {
+            const customMethodAst = {
+                kind: 'program',
+                children: [
+                    {
+                        kind: 'expressionstatement',
+                        expression: {
+                            kind: 'assign',
+                            left: { kind: 'variable', name: 'functions' },
+                            right: {
+                                kind: 'array',
+                                items: [
+                                    {
+                                        kind: 'entry',
+                                        key: { kind: 'string', value: 'custom_service_call' },
+                                        value: {
+                                            kind: 'array',
+                                            items: [
+                                                {
+                                                    kind: 'entry',
+                                                    key: { kind: 'string', value: 'classname' },
+                                                    value: { kind: 'string', value: 'custom_external' }
+                                                },
+                                                {
+                                                    kind: 'entry',
+                                                    key: { kind: 'string', value: 'methodname' },
+                                                    value: { kind: 'string', value: 'custom_fetch_data' }
+                                                }
+                                            ]
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                ]
+            };
+
+            const services = extractServices(customMethodAst);
+
+            expect(services).toHaveLength(1);
+            expect(services[0]).toEqual({
+                name: 'custom_service_call',
+                classname: 'custom_external',
+                methodname: 'custom_fetch_data'
+            });
+        });
     });
 
-    describe('Corrupted / Invalid Cases (Edge Cases)', () => {
+    describe('Corrupted / Invalid Cases & Resilience (Edge Cases)', () => {
 
         it('should discard service entries that do not declare "classname"', () => {
             const services = extractServices(corruptMissingClassname);
@@ -86,11 +132,92 @@ describe('Unit Test: service-extractor', () => {
             expect(services).toEqual([]);
         });
 
+        it('should filter out invalid entries and preserve valid services when mixed in the same $functions array', () => {
+            const mixedAst = {
+                kind: 'program',
+                children: [
+                    {
+                        kind: 'expressionstatement',
+                        expression: {
+                            kind: 'assign',
+                            left: { kind: 'variable', name: 'functions' },
+                            right: {
+                                kind: 'array',
+                                items: [
+                                    // 1. Invalid entry: missing classname
+                                    {
+                                        kind: 'entry',
+                                        key: { kind: 'string', value: 'invalid_entry_1' },
+                                        value: {
+                                            kind: 'array',
+                                            items: [
+                                                {
+                                                    kind: 'entry',
+                                                    key: { kind: 'string', value: 'type' },
+                                                    value: { kind: 'string', value: 'read' }
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    // 2. Valid entry
+                                    {
+                                        kind: 'entry',
+                                        key: { kind: 'string', value: 'valid_service' },
+                                        value: {
+                                            kind: 'array',
+                                            items: [
+                                                {
+                                                    kind: 'entry',
+                                                    key: { kind: 'string', value: 'classname' },
+                                                    value: { kind: 'string', value: 'valid_external' }
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    // 3. Invalid entry: value is a string, not an array
+                                    {
+                                        kind: 'entry',
+                                        key: { kind: 'string', value: 'invalid_entry_2' },
+                                        value: { kind: 'string', value: 'not_an_array' }
+                                    },
+                                    // 4. Invalid entry: key is numeric
+                                    {
+                                        kind: 'entry',
+                                        key: { kind: 'number', value: '0' },
+                                        value: {
+                                            kind: 'array',
+                                            items: [
+                                                {
+                                                    kind: 'entry',
+                                                    key: { kind: 'string', value: 'classname' },
+                                                    value: { kind: 'string', value: 'numeric_key_external' }
+                                                }
+                                            ]
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                ]
+            };
+
+            const services = extractServices(mixedAst);
+
+            expect(services).toHaveLength(1);
+            expect(services[0]).toEqual({
+                name: 'valid_service',
+                classname: 'valid_external',
+                methodname: 'execute'
+            });
+        });
+
         it('should handle empty, null, or undefined AST structures safely', () => {
             expect(extractServices({})).toEqual([]);
             expect(extractServices({ kind: 'program', children: [] })).toEqual([]);
             expect(extractServices(null)).toEqual([]);
             expect(extractServices(undefined)).toEqual([]);
+            expect(extractServices('not_an_object')).toEqual([]);
         });
     });
 

@@ -1,5 +1,5 @@
 import phpParser from 'php-parser';
-import { AstParserOptions } from '../interfaces/ast-parser.interfaces';
+import { AstParserOptions } from '../interfaces/ast/ast-parser.interfaces';
 
 export default class AstParser {
     private engine: phpParser.Engine;
