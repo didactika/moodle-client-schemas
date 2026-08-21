@@ -41,8 +41,10 @@ describe('Integration Flow: extractWebServices (Functional Pipeline)', () => {
         const mockService = {
             name: 'core_user_create_users',
             classname: 'core_user_external',
+            type: 'write',
             methodname: 'create_users',
-            classpath: 'user/externallib.php'
+            classpath: 'user/externallib.php',
+            description: ''
         };
         (ServiceExtractor.extractServices as jest.Mock).mockReturnValue([mockService]);
 
