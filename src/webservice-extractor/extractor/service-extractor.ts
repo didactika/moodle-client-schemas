@@ -11,6 +11,12 @@ import {
 /**
  * Assigns optional classpath property to the service if present in the definition map.
  *
+ * @example
+ * ```php
+ * 'classpath' => 'enrol/manual/externallib.php'
+ * ```
+ * Populates `service.classpath = 'enrol/manual/externallib.php'`.
+ *
  * @param {MoodleService} service - Web service instance being constructed.
  * @param {Map<string, Node>} fields - Associative properties map.
  */
@@ -23,6 +29,12 @@ function assignClasspath(service: MoodleService, fields: Map<string, Node>): voi
 /**
  * Assigns optional description property to the service if present in the definition map.
  *
+ * @example
+ * ```php
+ * 'description' => 'Manual enrol users'
+ * ```
+ * Populates `service.description = 'Manual enrol users'`.
+ *
  * @param {MoodleService} service - Web service instance being constructed.
  * @param {Map<string, Node>} fields - Associative properties map.
  */
@@ -34,6 +46,12 @@ function assignDescription(service: MoodleService, fields: Map<string, Node>): v
 
 /**
  * Assigns optional type property to the service if present in the definition map.
+ *
+ * @example
+ * ```php
+ * 'type' => 'write'
+ * ```
+ * Populates `service.type = 'write'`.
  *
  * @param {MoodleService} service - Web service instance being constructed.
  * @param {Map<string, Node>} fields - Associative properties map.
@@ -74,8 +92,17 @@ function isValidServiceEntry(name: string | null, entry: Entry): boolean {
 /**
  * Resolves the method name from the fields map or defaults to 'execute'.
  *
+ * @example
+ * ```ts
+ * // 1. When 'methodname' => 'get_users' is present in PHP:
+ * getMethodName(fields); // returns 'get_users'
+ *
+ * // 2. When 'methodname' is omitted in Moodle 4.x+:
+ * getMethodName(fields); // returns 'execute'
+ * ```
+ *
  * @param {Map<string, Node>} fields - Associative properties map.
- * @returns {string} The method name.
+ * @returns {string} The resolved method name.
  */
 function getMethodName(fields: Map<string, Node>): string {
     const name = extractStringLiteral(fields.get('methodname'));
@@ -87,6 +114,29 @@ function getMethodName(fields: Map<string, Node>): string {
 
 /**
  * Parses a single associative array Entry node representing a Moodle Web Service definition.
+ *
+ * @example
+ * Given an associative array entry in PHP:
+ * ```php
+ * 'mod_forum_get_forums' => array(
+ *     'classname'   => 'mod_forum_external',
+ *     'methodname'  => 'get_forums',
+ *     'classpath'   => 'mod/forum/externallib.php',
+ *     'description' => 'Returns list of forums',
+ *     'type'        => 'read'
+ * )
+ * ```
+ * Returns:
+ * ```ts
+ * {
+ *     name: 'mod_forum_get_forums',
+ *     classname: 'mod_forum_external',
+ *     methodname: 'get_forums',
+ *     classpath: 'mod/forum/externallib.php',
+ *     description: 'Returns list of forums',
+ *     type: 'read'
+ * }
+ * ```
  *
  * @param {Entry} entry - Associative Entry representing a service in $functions.
  * @returns {MoodleService | null} Parsed MoodleService object or null if invalid/incomplete.
@@ -184,6 +234,51 @@ function isValidFunctionsArray(array: PhpArray | null): array is PhpArray {
 
 /**
  * Extracts Web Service definitions declared in the $functions array of a services.php AST.
+ *
+ * @example
+ * Given Moodle db/services.php file content:
+ * ```php
+ * <?php
+ * $functions = array(
+ *     // Traditional Moodle 2.x/3.x format
+ *     'moodle_enrol_manual_enrol_users' => array(
+ *         'classname'   => 'moodle_enrol_manual_external',
+ *         'methodname'  => 'manual_enrol_users',
+ *         'classpath'   => 'enrol/manual/externallib.php',
+ *         'description' => 'Manual enrol users',
+ *         'type'        => 'write'
+ *     ),
+ *     // Modern Moodle 4.x+ PSR-4 format
+ *     'aiplacement_editor_generate_image' => [
+ *         'classname'   => \aiplacement_editor\external\generate_image::class,
+ *         'description' => 'Generate image with AI',
+ *         'type'        => 'write'
+ *     ]
+ * );
+ * ```
+ * In TypeScript:
+ * ```ts
+ * const services: MoodleService[] = extractServices(servicesAst);
+ *
+ * // Result:
+ * // [
+ * //   {
+ * //     name: 'moodle_enrol_manual_enrol_users',
+ * //     classname: 'moodle_enrol_manual_external',
+ * //     methodname: 'manual_enrol_users',
+ * //     classpath: 'enrol/manual/externallib.php',
+ * //     description: 'Manual enrol users',
+ * //     type: 'write'
+ * //   },
+ * //   {
+ * //     name: 'aiplacement_editor_generate_image',
+ * //     classname: '\\aiplacement_editor\\external\\generate_image',
+ * //     methodname: 'execute', // Defaults to 'execute' for Moodle 4.x+
+ * //     description: 'Generate image with AI',
+ * //     type: 'write'
+ * //   }
+ * // ]
+ * ```
  *
  * @param {unknown} ast - Abstract Syntax Tree of a services.php file.
  * @returns {MoodleService[]} Array of extracted service definitions.

@@ -33,6 +33,14 @@ function isProgramStructure(ast: Partial<Program>): boolean {
 /**
  * Validates whether an unknown AST node is a valid php-parser Program root node.
  *
+ * @example
+ * ```ts
+ * const ast = phpParserEngine.parseCode('<?php $functions = [];', 'services.php');
+ * if (isProgram(ast)) {
+ *     console.log(ast.children); // TypeScript now safely knows ast is a Program node
+ * }
+ * ```
+ *
  * @param {unknown} ast - Unknown node or structure to check.
  * @returns {ast is Program} True if the node is a Program with a valid children array.
  */
@@ -123,6 +131,20 @@ function searchChildrenForArray(children: Node[], variableName: string): PhpArra
 /**
  * Locates an assignment to a specific variable name within a Program AST and returns its array node.
  *
+ * @example
+ * Given PHP source:
+ * ```php
+ * <?php
+ * $functions = array(
+ *     'core_user_get_users' => array('classname' => 'core_user_external')
+ * );
+ * ```
+ * In TypeScript:
+ * ```ts
+ * const functionsArray = findVariableAssignment(ast, 'functions');
+ * // Returns the PhpArray AST node representing array('core_user_get_users' => ...)
+ * ```
+ *
  * @param {Program | Node} program - Root Program AST node.
  * @param {string} variableName - Variable name to search for (e.g., 'functions').
  * @returns {PhpArray | null} The assigned Array node, or null if not found.
@@ -136,9 +158,6 @@ export function findVariableAssignment(program: Program | Node, variableName: st
 
 /**
  * Safely verifies if an unknown value is an object containing a 'name' key.
- *
- * @param {unknown} obj - The value to inspect.
- * @returns {boolean} True if the object has a 'name' property.
  */
 function hasNameProperty(obj: unknown): boolean {
     if (!obj) {
@@ -152,9 +171,6 @@ function hasNameProperty(obj: unknown): boolean {
 
 /**
  * Safely extracts the 'name' property from an unknown object.
- *
- * @param {unknown} obj - The object to extract the property from.
- * @returns {string | null} The string value of the name property, or null if invalid.
  */
 function extractNameProperty(obj: unknown): string | null {
     if (!hasNameProperty(obj)) {
@@ -193,6 +209,23 @@ function handleStaticLookup(node: Node): string | null {
 /**
  * Extracts a string literal value from a String node or resolves a StaticLookup (::class) expression.
  *
+ * @example
+ * Example 1 - Plain String literal in PHP:
+ * ```php
+ * 'classname' => 'core_user_external'
+ * ```
+ * ```ts
+ * extractStringLiteral(node) // returns 'core_user_external'
+ * ```
+ *
+ * Example 2 - Modern PHP Class reference (StaticLookup):
+ * ```php
+ * 'classname' => \mod_forum\external\get_forums::class
+ * ```
+ * ```ts
+ * extractStringLiteral(node) // returns '\mod_forum\external\get_forums'
+ * ```
+ *
  * @param {Node | null | undefined} node - Node to extract string from.
  * @returns {string | null} String value or null if node is not a recognized string representation.
  */
@@ -208,6 +241,17 @@ export function extractStringLiteral(node: Node | null | undefined): string | nu
 
 /**
  * Extracts the string key from an associative array Entry node.
+ *
+ * @example
+ * Given PHP entry:
+ * ```php
+ * 'moodle_enrol_manual_enrol_users' => array(...)
+ * ```
+ * In TypeScript:
+ * ```ts
+ * const keyName = extractEntryKey(entryNode);
+ * // returns 'moodle_enrol_manual_enrol_users'
+ * ```
  *
  * @param {Entry} entry - Associative Entry node.
  * @returns {string | null} String key or null if missing/invalid.
@@ -270,6 +314,23 @@ function populateMapWithItems(map: Map<string, Node>, items: unknown[]): void {
 /**
  * Transforms an AST Array node into a Map of key strings to their corresponding AST value Nodes.
  *
+ * @example
+ * Given PHP associative array AST:
+ * ```php
+ * array(
+ *     'classname' => 'core_course_external',
+ *     'type' => 'read',
+ *     'description' => 'Get course contents'
+ * )
+ * ```
+ * In TypeScript:
+ * ```ts
+ * const fieldsMap = extractArrayEntriesMap(arrayNode);
+ * fieldsMap.get('classname');   // String AST Node with value 'core_course_external'
+ * fieldsMap.get('type');        // String AST Node with value 'read'
+ * fieldsMap.get('description'); // String AST Node with value 'Get course contents'
+ * ```
+ *
  * @param {PhpArray} arrayNode - AST Array node to convert.
  * @returns {Map<string, Node>} Map of key-value associations.
  */
@@ -286,6 +347,18 @@ export function extractArrayEntriesMap(arrayNode: PhpArray): Map<string, Node> {
 
 /**
  * Resolves a field value from an AST node, returning null for nullkeywords or the string content.
+ *
+ * @example
+ * ```ts
+ * // 1. Literal string node:
+ * extractFieldValue(stringNode); // returns 'read'
+ *
+ * // 2. Explicit PHP null keyword ('description' => null):
+ * extractFieldValue(nullKeywordNode); // returns null
+ *
+ * // 3. Undefined or absent node:
+ * extractFieldValue(undefined); // returns null
+ * ```
  *
  * @param {Node | null | undefined} node - AST node to extract value from.
  * @returns {string | null} String value, null for explicit null values, or null if missing.
