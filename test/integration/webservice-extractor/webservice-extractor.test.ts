@@ -1,4 +1,4 @@
-import { extractWebServices } from '../../../src/webservice-extractor/index';
+import { extractWebServices } from '../../../src/webservice-extractor';
 import { ExtractorConfig } from '../../../src/webservice-extractor/interfaces/extractor.interfaces';
 
 import * as Scanner from '../../../src/webservice-extractor/scanner/scanner';
@@ -67,7 +67,7 @@ describe('Integration Flow: extractWebServices (Functional Pipeline)', () => {
         expect(Scanner.findFiles).toHaveBeenCalledWith(config.moodlePath);
         expect(AstManager.getAst).toHaveBeenCalledWith('./src/tmp/moodle/v/4.5/user/db/services.php', config.moodlePath);
         expect(ServiceExtractor.extractServices).toHaveBeenCalledWith(mockServicesAst);
-        expect(ClassResolver.resolveClass).toHaveBeenCalledWith(mockService, config.moodlePath);
+        expect(ClassResolver.resolveClass).toHaveBeenCalledWith(mockService);
         expect(AstManager.getAst).toHaveBeenCalledWith('./src/tmp/moodle/v/4.5/user/externallib.php', config.moodlePath);
         expect(SchemaExtractor.extractSchema).toHaveBeenCalledWith(mockClassAst, mockService);
         expect(JsonGenerator.saveJson).toHaveBeenCalledWith([mockSchema], config.outputPath);

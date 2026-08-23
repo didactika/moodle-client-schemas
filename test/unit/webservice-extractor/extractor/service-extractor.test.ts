@@ -113,6 +113,90 @@ describe('Unit Test: service-extractor', () => {
                 methodname: 'custom_fetch_data'
             });
         });
+
+        it('should default methodname to "execute" when methodname is null, empty string, whitespace, or absent', () => {
+            const methodnameVariationsAst = {
+                kind: 'program',
+                children: [
+                    {
+                        kind: 'expressionstatement',
+                        expression: {
+                            kind: 'assign',
+                            left: { kind: 'variable', name: 'functions' },
+                            right: {
+                                kind: 'array',
+                                items: [
+                                    {
+                                        kind: 'entry',
+                                        key: { kind: 'string', value: 'svc_with_empty_method' },
+                                        value: {
+                                            kind: 'array',
+                                            items: [
+                                                {
+                                                    kind: 'entry',
+                                                    key: { kind: 'string', value: 'classname' },
+                                                    value: { kind: 'string', value: 'core_external_1' }
+                                                },
+                                                {
+                                                    kind: 'entry',
+                                                    key: { kind: 'string', value: 'methodname' },
+                                                    value: { kind: 'string', value: '' }
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        kind: 'entry',
+                                        key: { kind: 'string', value: 'svc_with_whitespace_method' },
+                                        value: {
+                                            kind: 'array',
+                                            items: [
+                                                {
+                                                    kind: 'entry',
+                                                    key: { kind: 'string', value: 'classname' },
+                                                    value: { kind: 'string', value: 'core_external_2' }
+                                                },
+                                                {
+                                                    kind: 'entry',
+                                                    key: { kind: 'string', value: 'methodname' },
+                                                    value: { kind: 'string', value: '   ' }
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        kind: 'entry',
+                                        key: { kind: 'string', value: 'svc_with_null_method' },
+                                        value: {
+                                            kind: 'array',
+                                            items: [
+                                                {
+                                                    kind: 'entry',
+                                                    key: { kind: 'string', value: 'classname' },
+                                                    value: { kind: 'string', value: 'core_external_3' }
+                                                },
+                                                {
+                                                    kind: 'entry',
+                                                    key: { kind: 'string', value: 'methodname' },
+                                                    value: { kind: 'nullkeyword', name: 'null' }
+                                                }
+                                            ]
+                                        }
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                ]
+            };
+
+            const services = extractServices(methodnameVariationsAst);
+
+            expect(services).toHaveLength(3);
+            expect(services[0].methodname).toBe('execute');
+            expect(services[1].methodname).toBe('execute');
+            expect(services[2].methodname).toBe('execute');
+        });
     });
 
     describe('Corrupted / Invalid Cases & Resilience (Edge Cases)', () => {

@@ -20,12 +20,12 @@ async function processSingleService(
     service: MoodleService,
     moodlePath: string
 ): Promise<WebServiceSchema | null> {
-    const resolved = await resolveClass(service, moodlePath);
-    if (!resolved) {
+    const classFilePath = await resolveClass(service);
+    if (!classFilePath) {
         return null;
     }
 
-    const classAst = await getAst(resolved.file, moodlePath);
+    const classAst = await getAst(classFilePath, moodlePath);
     return extractSchema(classAst, service);
 }
 
