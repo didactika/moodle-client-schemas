@@ -91,23 +91,25 @@ function isValidServiceEntry(name: string | null, entry: Entry): boolean {
 
 /**
  * Resolves the method name from the fields map or defaults to 'execute'.
+ * Returns 'execute' when methodname is absent, null, empty string, or whitespace-only.
  *
  * @example
  * ```ts
  * // 1. When 'methodname' => 'get_users' is present in PHP:
  * getMethodName(fields); // returns 'get_users'
  *
- * // 2. When 'methodname' is omitted in Moodle 4.x+:
+ * // 2. When 'methodname' => null, 'methodname' => '', or omitted:
  * getMethodName(fields); // returns 'execute'
  * ```
  *
  * @param {Map<string, Node>} fields - Associative properties map.
- * @returns {string} The resolved method name.
+ * @returns {string} The resolved method name, defaulting to 'execute'.
  */
 function getMethodName(fields: Map<string, Node>): string {
-    const name = extractStringLiteral(fields.get('methodname'));
-    if (name) {
-        return name;
+    const rawName = extractStringLiteral(fields.get('methodname'));
+    const trimmed = rawName?.trim();
+    if (trimmed) {
+        return trimmed;
     }
     return 'execute';
 }
