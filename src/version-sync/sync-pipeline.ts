@@ -5,7 +5,7 @@ import {
     getMissingLocalVersions
 } from './version-manager';
 import { cloneMoodleVersionsInBatch } from './moodle-downloader';
-import { extractWebServices } from '../webservice-extractor/index';
+import { extractWebServices } from '../webservice-extractor';
 
 /**
  * Identifies remote Moodle versions that do not exist locally.

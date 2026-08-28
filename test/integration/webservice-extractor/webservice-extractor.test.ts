@@ -5,17 +5,23 @@ import * as Scanner from '../../../src/webservice-extractor/scanner/scanner';
 import * as AstManager from '../../../src/webservice-extractor/cache/ast-manager';
 import * as ServiceExtractor from '../../../src/webservice-extractor/extractor/service-extractor';
 import * as ClassResolver from '../../../src/webservice-extractor/resolver/class-resolver';
-import * as SchemaExtractor from '../../../src/webservice-extractor/extractor/schema-extractor';
+import * as PhpSignatureExtractor from '../../../src/webservice-extractor/adapter/php-signature-extractor';
 import * as JsonGenerator from '../../../src/webservice-extractor/generator/json-generator';
+import * as VersionResolver from '../../../src/webservice-extractor/resolver/version-resolver';
 
 jest.mock('../../../src/webservice-extractor/scanner/scanner');
 jest.mock('../../../src/webservice-extractor/cache/ast-manager');
 jest.mock('../../../src/webservice-extractor/extractor/service-extractor');
+jest.mock('../../../src/webservice-extractor/resolver/version-resolver');
 jest.mock('../../../src/webservice-extractor/resolver/class-resolver');
-jest.mock('../../../src/webservice-extractor/extractor/schema-extractor');
+jest.mock('../../../src/webservice-extractor/adapter/php-signature-extractor');
 jest.mock('../../../src/webservice-extractor/generator/json-generator');
 
 describe('Integration Flow: extractWebServices (Functional Pipeline)', () => {
+
+    beforeEach(() => {
+        (VersionResolver.resolveVersion as jest.Mock).mockResolvedValue('4.5.0');
+    });
 
     afterEach(() => {
         jest.clearAllMocks();
@@ -24,56 +30,60 @@ describe('Integration Flow: extractWebServices (Functional Pipeline)', () => {
     it('should orchestrate sequential communication between all extractor modules', async () => {
         const config: ExtractorConfig = {
             version: '4.5',
-            moodlePath: './src/tmp/moodle/v/4.5',
+            moodlePath: './test/fixtures/mock_moodle',
             outputPath: './schemas/v/4.5.json'
         };
 
         (Scanner.findFiles as jest.Mock).mockResolvedValue([
-            './src/tmp/moodle/v/4.5/user/db/services.php'
+            './test/fixtures/mock_moodle/mod/sample/db/services.php'
         ]);
 
         const mockServicesAst = { type: 'Program', body: [] };
-        const mockClassAst = { type: 'ClassDeclaration', body: [] };
-        (AstManager.getAst as jest.Mock)
-            .mockResolvedValueOnce(mockServicesAst)
-            .mockResolvedValueOnce(mockClassAst);
+        (AstManager.getAst as jest.Mock).mockResolvedValueOnce(mockServicesAst);
 
         const mockService = {
-            name: 'core_user_create_users',
-            classname: 'core_user_external',
-            type: 'write',
-            methodname: 'create_users',
-            classpath: 'user/externallib.php',
-            description: ''
+            name: 'mod_sample_get_items',
+            classname: 'test_fixtures\\external\\sample_service_with_exporter',
+            type: 'read',
+            methodname: 'get_items',
+            description: 'Get sample items from fixture'
         };
         (ServiceExtractor.extractServices as jest.Mock).mockReturnValue([mockService]);
 
-        (ClassResolver.resolveClass as jest.Mock).mockResolvedValue({
-            file: './src/tmp/moodle/v/4.5/user/externallib.php',
-            classname: 'core_user_external',
-            resolution: 'classpath'
-        });
+        (ClassResolver.resolveClass as jest.Mock).mockResolvedValue(
+            'mod/sample/classes/external/sample_service_with_exporter.php'
+        );
 
-        const mockSchema = {
-            name: 'core_user_create_users',
-            parameters: { users: { type: 'array' } },
-            returns: { type: 'array' }
+        const mockSignature = {
+            parameters: { keys: { courseid: { type: 'int' } } },
+            returns: { keys: { items: { type: 'array' } } }
         };
-        (SchemaExtractor.extractSchema as jest.Mock).mockReturnValue(mockSchema);
+        (PhpSignatureExtractor.extractWebserviceSignature as jest.Mock).mockResolvedValue(mockSignature);
         (JsonGenerator.saveJson as jest.Mock).mockResolvedValue(undefined);
 
         const result = await extractWebServices(config);
 
-        expect(Scanner.findFiles).toHaveBeenCalledWith(config.moodlePath);
-        expect(AstManager.getAst).toHaveBeenCalledWith('./src/tmp/moodle/v/4.5/user/db/services.php', config.moodlePath);
+        expect(Scanner.findFiles).toHaveBeenCalledWith(config.moodlePath, ['*/db/services.php']);
+        expect(AstManager.getAst).toHaveBeenCalledWith('./test/fixtures/mock_moodle/mod/sample/db/services.php', config.moodlePath);
         expect(ServiceExtractor.extractServices).toHaveBeenCalledWith(mockServicesAst);
-        expect(ClassResolver.resolveClass).toHaveBeenCalledWith(mockService);
-        expect(AstManager.getAst).toHaveBeenCalledWith('./src/tmp/moodle/v/4.5/user/externallib.php', config.moodlePath);
-        expect(SchemaExtractor.extractSchema).toHaveBeenCalledWith(mockClassAst, mockService);
-        expect(JsonGenerator.saveJson).toHaveBeenCalledWith([mockSchema], config.outputPath);
+        expect(ClassResolver.resolveClass).toHaveBeenCalledWith(mockService, config.moodlePath);
+        expect(PhpSignatureExtractor.extractWebserviceSignature).toHaveBeenCalledWith({
+            moodlePath: config.moodlePath,
+            classFile: 'mod/sample/classes/external/sample_service_with_exporter.php',
+            classname: 'test_fixtures\\external\\sample_service_with_exporter',
+            methodname: 'get_items'
+        });
+
+        const expectedSchema = {
+            name: 'mod_sample_get_items',
+            description: 'Get sample items from fixture',
+            parameters: mockSignature.parameters,
+            returns: mockSignature.returns
+        };
+        expect(JsonGenerator.saveJson).toHaveBeenCalledWith([expectedSchema], config.outputPath);
 
         expect(result).toEqual({
-            version: '4.5',
+            version: '4.5.0',
             totalServices: 1,
             outputPath: config.outputPath
         });
@@ -82,11 +92,11 @@ describe('Integration Flow: extractWebServices (Functional Pipeline)', () => {
     it('should handle unresolvable service classes by omitting them from final result', async () => {
         const config: ExtractorConfig = {
             version: '4.5',
-            moodlePath: './src/tmp/moodle/v/4.5',
+            moodlePath: './test/fixtures/mock_moodle',
             outputPath: './schemas/v/4.5.json'
         };
 
-        (Scanner.findFiles as jest.Mock).mockResolvedValue(['./src/tmp/moodle/v/4.5/unknown/db/services.php']);
+        (Scanner.findFiles as jest.Mock).mockResolvedValue(['./test/fixtures/mock_moodle/unknown/db/services.php']);
         (AstManager.getAst as jest.Mock).mockResolvedValue({ type: 'Program' });
 
         const unresolvableService = {
@@ -98,7 +108,7 @@ describe('Integration Flow: extractWebServices (Functional Pipeline)', () => {
 
         const result = await extractWebServices(config);
 
-        expect(SchemaExtractor.extractSchema).not.toHaveBeenCalled();
+        expect(PhpSignatureExtractor.extractWebserviceSignature).not.toHaveBeenCalled();
         expect(JsonGenerator.saveJson).toHaveBeenCalledWith([], config.outputPath);
         expect(result.totalServices).toBe(0);
     });

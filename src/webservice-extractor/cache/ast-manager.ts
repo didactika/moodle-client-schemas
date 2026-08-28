@@ -27,6 +27,36 @@ export function configureAstManager(
 }
 
 /**
+ * Normalizes a file path to be relative to the repository root.
+ *
+ * @param {string} filePath - Absolute or relative file path.
+ * @param {string} repoPath - Root path of the repository.
+ * @returns {string} Relative file path within repository.
+ */
+function toRelativePath(filePath: string, repoPath: string): string {
+    if (!repoPath) {
+        return filePath;
+    }
+    const relative = path.relative(repoPath, filePath);
+    return relative.startsWith('..') ? filePath : relative;
+}
+
+/**
+ * Resolves the full filesystem path for a file.
+ *
+ * @param {string} filePath - Absolute or relative file path.
+ * @param {string} repoPath - Root path of the repository.
+ * @returns {string} Full resolved file path.
+ */
+function toFullPath(filePath: string, repoPath: string): string {
+    if (!repoPath) {
+        return filePath;
+    }
+    const rel = toRelativePath(filePath, repoPath);
+    return path.join(repoPath, rel);
+}
+
+/**
  * Fallback parser when Git hash is unavailable.
  *
  * @param {string} relativeFilePath - Relative file path.
@@ -34,7 +64,7 @@ export function configureAstManager(
  * @returns {Promise<unknown>} Parsed AST.
  */
 async function parseDirectly(relativeFilePath: string, repoPath: string): Promise<unknown> {
-    const fullPath = repoPath ? path.join(repoPath, relativeFilePath) : relativeFilePath;
+    const fullPath = toFullPath(relativeFilePath, repoPath);
     const sourceCode = await fs.readFile(fullPath, 'utf-8');
     return defaultParser.parse(sourceCode);
 }
@@ -52,7 +82,7 @@ async function readParseAndCache(
     relativeFilePath: string,
     repoPath: string
 ): Promise<unknown> {
-    const fullPath = repoPath ? path.join(repoPath, relativeFilePath) : relativeFilePath;
+    const fullPath = toFullPath(relativeFilePath, repoPath);
     const sourceCode = await fs.readFile(fullPath, 'utf-8');
     const ast = defaultParser.parse(sourceCode);
     await defaultCache.set(gitSha1, ast);
@@ -116,13 +146,14 @@ async function resolveByHash(
  * @returns {Promise<unknown>} Parsed AST representation.
  */
 export async function getAst(
-    relativeFilePath: string,
+    filePath: string,
     repoPath: string
 ): Promise<unknown> {
-    const gitSha1 = await getGitBlobHash(relativeFilePath, repoPath);
+    const relPath = toRelativePath(filePath, repoPath);
+    const gitSha1 = await getGitBlobHash(relPath, repoPath);
     if (!gitSha1) {
-        return parseDirectly(relativeFilePath, repoPath);
+        return parseDirectly(relPath, repoPath);
     }
 
-    return resolveByHash(gitSha1, relativeFilePath, repoPath);
+    return resolveByHash(gitSha1, relPath, repoPath);
 }

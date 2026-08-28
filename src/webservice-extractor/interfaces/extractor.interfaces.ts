@@ -1,7 +1,7 @@
 export interface ExtractorConfig {
     version: string;
     moodlePath: string;
-    outputPath: string;
+    outputPath?: string;
 }
 
 export interface ExtractorResult {
