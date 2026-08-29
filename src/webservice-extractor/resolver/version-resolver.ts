@@ -122,6 +122,120 @@ function cleanReleaseVersion(rawRelease: string): string | null {
     return match ? match[1] : null;
 }
 
+import { findFiles } from '../scanner/scanner';
+import path from 'path';
+
+/**
+ * Attempts to parse AST and extract release string from a candidate relative path.
+ *
+ * @param {string} relPath - Candidate relative path.
+ * @param {string} moodlePath - Root path of Moodle repository.
+ * @returns {Promise<string | null>} Extracted release string or null.
+ */
+async function tryExtractRelease(relPath: string, moodlePath: string): Promise<string | null> {
+    try {
+        const ast = await getAst(relPath, moodlePath);
+        return extractReleaseString(ast);
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Iterates through candidate version.php paths to find the first containing a valid release.
+ *
+ * @param {string[]} candidates - List of candidate file paths.
+ * @param {string} moodlePath - Root path of Moodle repository.
+ * @returns {Promise<string | null>} First valid release string or null.
+ */
+async function findReleaseInCandidates(candidates: string[], moodlePath: string): Promise<string | null> {
+    const sorted = candidates.sort((a, b) => a.length - b.length);
+    for (const candidate of sorted) {
+        const relPath = path.relative(moodlePath, candidate);
+        const release = await tryExtractRelease(relPath, moodlePath);
+        if (release) {
+            return release;
+        }
+    }
+    return null;
+}
+
+interface DirectResult {
+    found: boolean;
+    release: string | null;
+}
+
+/**
+ * Attempts to load version.php directly from root.
+ *
+ * @param {string} moodlePath - Root path of Moodle repository.
+ * @returns {Promise<DirectResult>} Result object.
+ */
+async function tryDirectVersion(moodlePath: string): Promise<DirectResult> {
+    try {
+        const ast = await getAst('version.php', moodlePath);
+        return { found: true, release: extractReleaseString(ast) };
+    } catch {
+        return { found: false, release: null };
+    }
+}
+
+/**
+ * Searches candidates across file tree for release variable.
+ *
+ * @param {string} moodlePath - Root path of Moodle repository.
+ * @returns {Promise<string | null>} Found release string or null.
+ */
+async function searchCandidatesRelease(moodlePath: string): Promise<string | null> {
+    const candidates = await findFiles(moodlePath, ['*version.php', '*/version.php', '*/*/version.php']);
+    return findReleaseInCandidates(candidates, moodlePath);
+}
+
+/**
+ * Throws descriptive error depending on whether version.php was found without release.
+ *
+ * @param {boolean} directFound - True if file was found at root.
+ * @param {string} moodlePath - Root path of Moodle repository.
+ */
+function handleMissingRelease(directFound: boolean, moodlePath: string): never {
+    if (directFound) {
+        throw new Error('Unable to resolve Moodle version from version.php: release variable is missing');
+    }
+    throw new Error(`Unable to resolve Moodle version: version.php not found in ${moodlePath}`);
+}
+
+/**
+ * Discovers the release string from root version.php or scans tree candidates.
+ *
+ * @param {string} moodlePath - Root path of Moodle repository.
+ * @returns {Promise<string>} Found release string.
+ */
+async function discoverReleaseString(moodlePath: string): Promise<string> {
+    const direct = await tryDirectVersion(moodlePath);
+    if (direct.release) {
+        return direct.release;
+    }
+    const candidateRelease = await searchCandidatesRelease(moodlePath);
+    if (candidateRelease) {
+        return candidateRelease;
+    }
+    return handleMissingRelease(direct.found, moodlePath);
+}
+
+/**
+ * Validates and normalizes raw release into clean semantic version.
+ *
+ * @param {string} rawRelease - Raw release string from version.php.
+ * @returns {string} Clean semantic version.
+ */
+function validateCleanVersion(rawRelease: string): string {
+    const cleanVersion = cleanReleaseVersion(rawRelease);
+    if (!cleanVersion) {
+        throw new Error(`Unable to resolve Moodle version from version.php: invalid release format "${rawRelease}"`);
+    }
+    return cleanVersion;
+}
+
 /**
  * Resolves and returns the semantic Moodle version from a repository root path.
  *
@@ -138,19 +252,6 @@ function cleanReleaseVersion(rawRelease: string): string | null {
  * @throws {Error} When version.php is unreadable or does not contain a valid release variable.
  */
 export async function resolveVersion(moodlePath: string): Promise<string> {
-    const ast = await getAst('version.php', moodlePath).catch(() => {
-        throw new Error(`Unable to resolve Moodle version: version.php not found in ${moodlePath}`);
-    });
-
-    const rawRelease = extractReleaseString(ast);
-    if (!rawRelease) {
-        throw new Error('Unable to resolve Moodle version from version.php: release variable is missing');
-    }
-
-    const cleanVersion = cleanReleaseVersion(rawRelease);
-    if (!cleanVersion) {
-        throw new Error(`Unable to resolve Moodle version from version.php: invalid release format "${rawRelease}"`);
-    }
-
-    return cleanVersion;
+    const rawRelease = await discoverReleaseString(moodlePath);
+    return validateCleanVersion(rawRelease);
 }

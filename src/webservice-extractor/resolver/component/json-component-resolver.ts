@@ -46,6 +46,29 @@ function parseComponentsJson(raw: string, filePath: string): MoodleComponentsJso
     }
 }
 
+import { findFirstFile } from '../../scanner/scanner';
+
+/**
+ * Loads raw content of lib/components.json directly or via dynamic pattern search.
+ *
+ * @param {string} moodlePath - Root path of Moodle repository.
+ * @returns {Promise<{ raw: string; filePath: string }>} Raw content and resolved file path.
+ */
+async function loadComponentsJsonContent(moodlePath: string): Promise<{ raw: string; filePath: string }> {
+    const directPath = path.join(moodlePath, 'lib/components.json');
+    try {
+        const raw = await fs.readFile(directPath, 'utf-8');
+        return { raw, filePath: directPath };
+    } catch {
+        const found = await findFirstFile(moodlePath, 'lib/components.json');
+        if (found) {
+            const raw = await fs.readFile(found, 'utf-8');
+            return { raw, filePath: found };
+        }
+        throw new Error(`Unable to load components from ${directPath}`);
+    }
+}
+
 /**
  * Resolves plugintypes map from modern Moodle lib/components.json (Moodle >= 3.8).
  *
@@ -60,12 +83,8 @@ function parseComponentsJson(raw: string, filePath: string): MoodleComponentsJso
  * @returns {Promise<Map<string, string>>} Plugin types to directory mapping.
  */
 export async function resolveJsonComponents(moodlePath: string): Promise<Map<string, string>> {
-    const filePath = path.join(moodlePath, 'lib/components.json');
-    const rawContent = await fs.readFile(filePath, 'utf-8').catch(() => {
-        throw new Error(`Unable to load components from ${filePath}`);
-    });
-
-    const parsed = parseComponentsJson(rawContent, filePath);
+    const { raw, filePath } = await loadComponentsJsonContent(moodlePath);
+    const parsed = parseComponentsJson(raw, filePath);
     const plugintypes = new Map<string, string>();
 
     registerPlugintypes(plugintypes, parsed.plugintypes);

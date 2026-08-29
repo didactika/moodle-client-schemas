@@ -289,6 +289,28 @@ function extractMethodArray(classNode: PhpClass, methodName: string): PhpArray |
     return method ? findArrayInMethod(method) : null;
 }
 
+import { findFirstFile } from '../../scanner/scanner';
+import path from 'path';
+
+/**
+ * Loads AST of lib/classes/component.php directly or via dynamic pattern search.
+ *
+ * @param {string} moodlePath - Root path of Moodle repository.
+ * @returns {Promise<unknown>} Parsed AST.
+ */
+async function loadClassComponentAst(moodlePath: string): Promise<unknown> {
+    try {
+        return await getAst('lib/classes/component.php', moodlePath);
+    } catch {
+        const found = await findFirstFile(moodlePath, 'lib/classes/component.php');
+        if (found) {
+            const relPath = path.relative(moodlePath, found);
+            return await getAst(relPath, moodlePath);
+        }
+        throw new Error(`Unable to resolve component class from lib/classes/component.php in ${moodlePath}`);
+    }
+}
+
 /**
  * Resolves plugintypes map by parsing lib/classes/component.php AST (Moodle 2.6 - 3.7).
  *
@@ -303,9 +325,7 @@ function extractMethodArray(classNode: PhpClass, methodName: string): PhpArray |
  * @returns {Promise<Map<string, string>>} Plugintypes to directory mapping.
  */
 export async function resolveClassComponents(moodlePath: string): Promise<Map<string, string>> {
-    const ast = await getAst('lib/classes/component.php', moodlePath).catch(() => {
-        throw new Error(`Unable to resolve component class from lib/classes/component.php in ${moodlePath}`);
-    });
+    const ast = await loadClassComponentAst(moodlePath);
 
     if (!isProgram(ast)) {
         throw new Error(`Unable to resolve component class from lib/classes/component.php in ${moodlePath}`);

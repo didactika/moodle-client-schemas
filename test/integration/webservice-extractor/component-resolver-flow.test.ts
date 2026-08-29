@@ -2,8 +2,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import { determineStrategy, resolverComponent } from '../../../src/webservice-extractor/resolver/component-resolver';
 import AstParser from '../../../src/webservice-extractor/parser/ast-parser';
-import ContentCache from '../../../src/webservice-extractor/cache/content-cache';
-import { configureAstManager } from '../../../src/webservice-extractor/cache/ast-manager';
+import { configureAstManager, clearAstCache } from '../../../src/webservice-extractor/cache/ast-manager';
 
 describe('Integration Flow: Multi-Strategy Component Resolution Pipeline', () => {
 
@@ -15,9 +14,9 @@ describe('Integration Flow: Multi-Strategy Component Resolution Pipeline', () =>
     const moodle52Path = path.join(mockMoodleRoot, 'v52');
 
     beforeAll(async () => {
-        const cache = new ContentCache({ cacheDir: path.join(mockMoodleRoot, '.cache'), maxEpochAge: 3 });
+        clearAstCache();
         const parser = new AstParser();
-        configureAstManager(cache, parser);
+        configureAstManager(parser);
 
         await fs.mkdir(path.join(moodle20Path, 'lib'), { recursive: true });
         await fs.writeFile(

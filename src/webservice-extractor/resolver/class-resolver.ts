@@ -160,6 +160,73 @@ function extractFrankenstyleComponent(cleanClass: string): string {
     return cleanClass;
 }
 
+const moodleBaseCache = new Map<string, string>();
+
+/**
+ * Checks if a directory entry contains a version.php file.
+ *
+ * @param {string} moodlePath - Root path.
+ * @param {fs.Dirent} entry - Directory entry.
+ * @returns {string | null} Full directory path or null.
+ */
+function checkEntryDirectory(moodlePath: string, entry: fs.Dirent): string | null {
+    if (entry.isDirectory() && fs.existsSync(path.join(moodlePath, entry.name, 'version.php'))) {
+        return path.join(moodlePath, entry.name);
+    }
+    return null;
+}
+
+/**
+ * Searches list of directory entries for one containing version.php.
+ *
+ * @param {string} moodlePath - Root path.
+ * @param {fs.Dirent[]} entries - Directory entries.
+ * @returns {string | null} Found directory or null.
+ */
+function findVersionInEntries(moodlePath: string, entries: fs.Dirent[]): string | null {
+    for (const entry of entries) {
+        const match = checkEntryDirectory(moodlePath, entry);
+        if (match) {
+            return match;
+        }
+    }
+    return null;
+}
+
+/**
+ * Scans immediate subdirectories to find where version.php resides.
+ *
+ * @param {string} moodlePath - Provided root path.
+ * @returns {string} Discovered base directory or original path.
+ */
+function scanSubdirectoryBase(moodlePath: string): string {
+    try {
+        const entries = fs.readdirSync(moodlePath, { withFileTypes: true });
+        const found = findVersionInEntries(moodlePath, entries);
+        return found ? found : moodlePath;
+    } catch {
+        return moodlePath;
+    }
+}
+
+/**
+ * Resolves and caches the effective root directory containing Moodle source files.
+ *
+ * @param {string} moodlePath - Provided root path.
+ * @returns {string} Effective directory.
+ */
+function getEffectiveMoodlePath(moodlePath: string): string {
+    const cached = moodleBaseCache.get(moodlePath);
+    if (cached) {
+        return cached;
+    }
+    const resolved = fs.existsSync(path.join(moodlePath, 'version.php'))
+        ? moodlePath
+        : scanSubdirectoryBase(moodlePath);
+    moodleBaseCache.set(moodlePath, resolved);
+    return resolved;
+}
+
 /**
  * Checks if a candidate relative file exists within the Moodle repository.
  *
@@ -173,7 +240,47 @@ function extractFrankenstyleComponent(cleanClass: string): string {
  * @returns {boolean} True if the file exists on disk.
  */
 function fileExists(moodlePath: string, relativePath: string): boolean {
-    return fs.existsSync(path.join(moodlePath, relativePath));
+    if (fs.existsSync(path.join(moodlePath, relativePath))) {
+        return true;
+    }
+    const base = getEffectiveMoodlePath(moodlePath);
+    return fs.existsSync(path.join(base, relativePath));
+}
+
+/**
+ * Locates core_external class file across modern (5.0+) and legacy layouts.
+ *
+ * @param {string} moodlePath - Root path of Moodle repository.
+ * @returns {string | null} Relative file path or null.
+ */
+function findCoreExternalClass(moodlePath: string): string | null {
+    if (fileExists(moodlePath, 'lib/external/externallib.php')) {
+        return 'lib/external/externallib.php';
+    }
+    if (fileExists(moodlePath, 'lib/externallib.php')) {
+        return 'lib/externallib.php';
+    }
+    return null;
+}
+
+/**
+ * Looks for core subsystem class files in lib/classes/.
+ *
+ * @param {string} component - Component identifier.
+ * @param {string} moodlePath - Root path of Moodle repository.
+ * @returns {string | null} Monolithic class path or null.
+ */
+function findCoreSubsystemClass(component: string, moodlePath: string): string | null {
+    const rawSubsystem = component.replace(/^core_/, '');
+    const candidateA = `lib/classes/${rawSubsystem}_external.php`;
+    if (fileExists(moodlePath, candidateA)) {
+        return candidateA;
+    }
+    const candidateB = `lib/classes/${component}_external.php`;
+    if (fileExists(moodlePath, candidateB)) {
+        return candidateB;
+    }
+    return null;
 }
 
 /**
@@ -189,16 +296,10 @@ function fileExists(moodlePath: string, relativePath: string): boolean {
  * @returns {string | null} Monolithic class path or null.
  */
 function findMonolithicCoreClass(component: string, moodlePath: string): string | null {
-    const rawSubsystem = component.replace(/^core_/, '');
-    const candidateA = `lib/classes/${rawSubsystem}_external.php`;
-    if (fileExists(moodlePath, candidateA)) {
-        return candidateA;
+    if (component === 'core' || component === 'core_external') {
+        return findCoreExternalClass(moodlePath);
     }
-    const candidateB = `lib/classes/${component}_external.php`;
-    if (fileExists(moodlePath, candidateB)) {
-        return candidateB;
-    }
-    return null;
+    return findCoreSubsystemClass(component, moodlePath);
 }
 
 /**

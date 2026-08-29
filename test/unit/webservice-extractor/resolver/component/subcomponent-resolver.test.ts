@@ -5,18 +5,17 @@ import {
     resolveAstSubplugins,
     resolveAllSubplugins
 } from '../../../../../src/webservice-extractor/resolver/component/subcomponent-resolver';
-import ContentCache from '../../../../../src/webservice-extractor/cache/content-cache';
 import AstParser from '../../../../../src/webservice-extractor/parser/ast-parser';
-import { configureAstManager } from '../../../../../src/webservice-extractor/cache/ast-manager';
+import { configureAstManager, clearAstCache } from '../../../../../src/webservice-extractor/cache/ast-manager';
 
 describe('Unit Test: subcomponent-resolver (Subplugin & Subsystem Branch Discovery)', () => {
 
     const mockMoodlePath = path.resolve(__dirname, '../../../../tmp/mock_moodle_subcomponents_test');
 
     beforeEach(async () => {
-        const cache = new ContentCache({ cacheDir: path.join(mockMoodlePath, '.cache'), maxEpochAge: 3 });
+        clearAstCache();
         const parser = new AstParser();
-        configureAstManager(cache, parser);
+        configureAstManager(parser);
 
         await fs.mkdir(path.join(mockMoodlePath, 'lib/editor/tiny/db'), { recursive: true });
         await fs.mkdir(path.join(mockMoodlePath, 'mod/quiz/db'), { recursive: true });

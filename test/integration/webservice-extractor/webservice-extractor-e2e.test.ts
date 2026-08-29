@@ -1,35 +1,16 @@
 import path from 'path';
-import fs from 'fs/promises';
-import { extractWebServices } from '../../../src/webservice-extractor';
-import { WebServiceSchema } from '../../../src/webservice-extractor/interfaces/schema-extractor.interfaces';
+import { extractWebservice } from '../../../src/webservice-extractor';
 import { ObjectSchemaNode, ValueSchemaNode, ArraySchemaNode } from '../../../src/webservice-extractor/interfaces/signature.interfaces';
 
 const MOCK_MOODLE_DIR = path.resolve(__dirname, '../../fixtures/mock_moodle');
-const OUTPUT_PATH = path.resolve(__dirname, '../../fixtures/mock_moodle/output_e2e_test.json');
 
-describe('Integration E2E: extractWebServices (Live Pipeline with Mock Moodle Fixture)', () => {
+describe('Integration E2E: extractWebservice (Live Pipeline with Mock Moodle Fixture)', () => {
 
-    afterAll(async () => {
-        try {
-            await fs.unlink(OUTPUT_PATH);
-        } catch {
-            // Ignore if file was not created.
-        }
-    });
-
-    it('should scan services.php, resolve class, execute PHP adapter and output schemas JSON', async () => {
-        const result = await extractWebServices({
-            version: '4.5.0',
+    it('should scan services.php, resolve class, execute PHP adapter and return schemas in memory', async () => {
+        const schemas = await extractWebservice({
             moodlePath: MOCK_MOODLE_DIR,
-            outputPath: OUTPUT_PATH
+            services: ['*']
         });
-
-        expect(result.version).toBe('4.5.0');
-        expect(result.totalServices).toBe(1);
-        expect(result.outputPath).toBe(OUTPUT_PATH);
-
-        const rawContent = await fs.readFile(OUTPUT_PATH, 'utf-8');
-        const schemas = JSON.parse(rawContent) as WebServiceSchema[];
 
         expect(schemas).toHaveLength(1);
         const service = schemas[0];

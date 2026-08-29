@@ -26,7 +26,6 @@ dist-ssr
 
 # Temporary downloaded repositories
 tmp
-src/tmp
 
 # testing
 coverage/

@@ -12,6 +12,8 @@ import {
 
 jest.mock('child_process');
 
+import { setPhpBinaryPath } from '../../../src/webservice-extractor/adapter/php-runtime';
+
 describe('Unit Test: PHP Signature Extractor Bridge (Phase 3)', () => {
 
     const validPayload: SignatureExtractionPayload = {
@@ -20,6 +22,10 @@ describe('Unit Test: PHP Signature Extractor Bridge (Phase 3)', () => {
         classname: 'core_user_external',
         methodname: 'get_users'
     };
+
+    beforeEach(() => {
+        setPhpBinaryPath('php');
+    });
 
     afterEach(() => {
         jest.clearAllMocks();
@@ -134,6 +140,47 @@ describe('Unit Test: PHP Signature Extractor Bridge (Phase 3)', () => {
             );
         });
 
+        it('should handle ETIMEDOUT error with a descriptive timeout error message', async () => {
+            const mockError = new Error('timed out') as Error & { code?: string; stderr?: string };
+            mockError.code = 'ETIMEDOUT';
+            mockError.stderr = '';
+
+            (childProcess.execFile as unknown as jest.Mock).mockImplementation(
+                (_cmd: string, _args: string[], _opts: unknown, callback: (err: Error | null, stdout: string, stderr: string) => void) => {
+                    callback(mockError, '', '');
+                }
+            );
+
+            await expect(extractWebserviceSignature(validPayload, 2000)).rejects.toThrow(
+                /PHP Signature Extraction failed: Execution timed out/
+            );
+        });
+
+        it('should format file and line location when available in JSON error payload', async () => {
+            const phpErrorPayload = JSON.stringify({
+                success: false,
+                code: 3,
+                error: 'Cannot redeclare function sample()',
+                file: '/var/www/moodle/lib/sample.php',
+                line: 128
+            });
+
+            const mockError = new Error('Command failed') as Error & { code?: number; stderr?: string };
+            mockError.code = 3;
+            mockError.stderr = phpErrorPayload;
+
+            (childProcess.execFile as unknown as jest.Mock).mockImplementation(
+                (_cmd: string, _args: string[], _opts: unknown, callback: (err: Error | null, stdout: string, stderr: string) => void) => {
+                    callback(mockError, '', phpErrorPayload);
+                }
+            );
+
+            await expect(extractWebserviceSignature(validPayload)).rejects.toThrow(
+                /PHP Signature Extraction failed: Cannot redeclare function sample\(\) in \/var\/www\/moodle\/lib\/sample\.php:128/
+            );
+        });
+
     });
 
 });
+
