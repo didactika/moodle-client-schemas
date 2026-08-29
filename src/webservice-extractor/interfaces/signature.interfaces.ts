@@ -1,56 +1,77 @@
 /**
  * Structural schema node kind classification.
  */
-export type SchemaKind = 'parameters' | 'object' | 'array' | 'value' | 'description';
+export type WebServiceSchemaKind = 'parameters' | 'object' | 'array' | 'value' | 'description';
 
 /**
- * Base schema node attributes.
+ * Base schema attributes shared across all schema node types.
  */
-export interface BaseSchemaNode {
-    kind?: SchemaKind;
-    desc?: string;
+export interface WebServiceBaseSchema {
+    kind?: WebServiceSchemaKind;
+    /** Human-readable parameter or field description written by Moodle developers */
     description?: string;
+    /** Backwards-compatible alias for description */
+    desc?: string;
     required?: number;
     default?: unknown;
     allownull?: boolean;
 }
 
 /**
- * Primitive leaf schema node (maps to external_value).
+ * Primitive leaf schema node (maps to Moodle external_value).
  */
-export interface ValueSchemaNode extends BaseSchemaNode {
+export interface WebServiceValueSchema extends WebServiceBaseSchema {
     kind?: 'value';
+    /** Moodle parameter type constant name (e.g. 'PARAM_INT', 'PARAM_TEXT', 'PARAM_BOOL', 'PARAM_ALPHANUM') */
     type: string;
 }
 
 /**
- * Associative object schema node (maps to external_single_structure or external_function_parameters).
+ * Associative object schema node with key-value property map (maps to external_single_structure or external_function_parameters).
  */
-export interface ObjectSchemaNode extends BaseSchemaNode {
+export interface WebServiceObjectSchema extends WebServiceBaseSchema {
     kind?: 'parameters' | 'object';
-    keys: Record<string, SchemaNode>;
+    /** Dictionary mapping parameter or property names to their child schemas */
+    keys: Record<string, WebServiceReturnSchema>;
 }
 
 /**
- * Array list schema node (maps to external_multiple_structure).
+ * Schema representing the root parameter dictionary of a Web Service (maps to external_function_parameters).
  */
-export interface ArraySchemaNode extends BaseSchemaNode {
+export type WebServiceParametersSchema = WebServiceObjectSchema;
+
+/**
+ * Array list schema node containing homogeneous items (maps to Moodle external_multiple_structure).
+ */
+export interface WebServiceArraySchema extends WebServiceBaseSchema {
     kind?: 'array';
-    content: SchemaNode;
+    /** Schema definition of the elements contained in the array */
+    content: WebServiceReturnSchema;
 }
 
 /**
- * Union type representing any structural schema node.
+ * Return schema union representing any valid Moodle return structure (primitive value, object, or array).
  */
-export type SchemaNode = ValueSchemaNode | ObjectSchemaNode | ArraySchemaNode;
+export type WebServiceReturnSchema =
+    | WebServiceValueSchema
+    | WebServiceObjectSchema
+    | WebServiceArraySchema;
 
 /**
- * Root signature definition containing parameters and returns schemas.
+ * Raw signature definition returned by the sandboxed PHP reflection introspector.
  */
 export interface WebserviceSignature {
-    parameters: ObjectSchemaNode | null;
-    returns: SchemaNode | null;
+    parameters: WebServiceParametersSchema | null;
+    returns: WebServiceReturnSchema | null;
 }
+
+// Backwards-compatible aliases
+export type SchemaKind = WebServiceSchemaKind;
+export type BaseSchemaNode = WebServiceBaseSchema;
+export type ValueSchemaNode = WebServiceValueSchema;
+export type ObjectSchemaNode = WebServiceObjectSchema;
+export type ArraySchemaNode = WebServiceArraySchema;
+export type SchemaNode = WebServiceReturnSchema;
 
 /**
  * Payload sent to the PHP signature extractor.
@@ -60,4 +81,13 @@ export interface SignatureExtractionPayload {
     classFile: string;
     classname: string;
     methodname: string;
+}
+
+/**
+ * Structured error payload emitted by PHP CLI adapter.
+ */
+export interface JsonErrorPayload {
+    error?: string;
+    file?: string;
+    line?: number;
 }

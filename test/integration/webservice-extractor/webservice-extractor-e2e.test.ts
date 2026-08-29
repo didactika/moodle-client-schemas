@@ -7,11 +7,12 @@ const MOCK_MOODLE_DIR = path.resolve(__dirname, '../../fixtures/mock_moodle');
 describe('Integration E2E: extractWebservice (Live Pipeline with Mock Moodle Fixture)', () => {
 
     it('should scan services.php, resolve class, execute PHP adapter and return schemas in memory', async () => {
-        const schemas = await extractWebservice({
+        const { schemas, errors } = await extractWebservice({
             moodlePath: MOCK_MOODLE_DIR,
             services: ['*']
         });
 
+        expect(errors).toHaveLength(0);
         expect(schemas).toHaveLength(1);
         const service = schemas[0];
         expect(service.name).toBe('mod_sample_get_items');

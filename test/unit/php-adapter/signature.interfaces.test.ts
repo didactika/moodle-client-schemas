@@ -3,7 +3,10 @@ import {
     ValueSchemaNode,
     ObjectSchemaNode,
     ArraySchemaNode,
-    SignatureExtractionPayload
+    SignatureExtractionPayload,
+    WebServiceValueSchema,
+    WebServiceParametersSchema,
+    WebServiceReturnSchema
 } from '../../../src/webservice-extractor/interfaces/signature.interfaces';
 
 describe('Unit Test: TypeScript Signature Interfaces (Phase 1)', () => {
@@ -70,6 +73,40 @@ describe('Unit Test: TypeScript Signature Interfaces (Phase 1)', () => {
 
         expect(payload.moodlePath).toBe('/var/www/moodle');
         expect(payload.classname).toBe('core_user_external');
+    });
+
+    it('should correctly model WebServiceParametersSchema and WebServiceReturnSchema', () => {
+        const idValue: WebServiceValueSchema = {
+            kind: 'value',
+            type: 'PARAM_INT',
+            desc: 'Course ID',
+            required: 1
+        };
+
+        const params: WebServiceParametersSchema = {
+            kind: 'parameters',
+            keys: {
+                courseid: idValue
+            }
+        };
+
+        const returns: WebServiceReturnSchema = {
+            kind: 'array',
+            content: {
+                kind: 'object',
+                keys: {
+                    id: idValue,
+                    fullname: {
+                        kind: 'value',
+                        type: 'PARAM_TEXT',
+                        desc: 'Full course name'
+                    }
+                }
+            }
+        };
+
+        expect(params.keys.courseid.kind).toBe('value');
+        expect(returns.kind).toBe('array');
     });
 
 });

@@ -13,8 +13,10 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "src/php-adapter"
   ],
+  "sideEffects": false,
   "scripts": {
     "build": "tsup",
     "lint": "eslint .",
@@ -22,8 +24,8 @@
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "jest",
-    "test:unit": "jest --testPathPattern=test/unit",
+    "test": "jest --maxWorkers=50%",
+    "test:unit": "jest --testPathPattern=test/unit --maxWorkers=50%",
     "test:coverage": "jest --coverage",
     "prepublishOnly": "npm run lint && npm run typecheck && npm run test && npm run build"
   },
