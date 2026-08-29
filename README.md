@@ -1,41 +1,31 @@
-# moodle-client-schemas
+# @didactika/moodle-client-schemas
 
-<!-- Package -->
 [![npm version](https://img.shields.io/npm/v/@didactika/moodle-client-schemas.svg?logo=npm)](https://www.npmjs.com/package/@didactika/moodle-client-schemas)
-[![CI](https://img.shields.io/github/actions/workflow/status/didactika/moodle-client-schemas/ci.yml?branch=main&logo=github&label=CI)](https://github.com/didactika/moodle-client-schemas/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-3178C6.svg?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Node.js](https://img.shields.io/badge/Node-20%20%7C%2022%20%7C%2024-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/)
+[![Moodle](https://img.shields.io/badge/Moodle-2.0%20%E2%86%92%205.x+-F98012?logo=moodle&logoColor=white)](https://moodle.org/)
 
-<!-- Runtime & Ecosystem -->
-[![Node](https://img.shields.io/badge/Node-20%20%7C%2022%20%7C%2024-339933?logo=nodedotjs&logoColor=white)](https://nodejs.org/en/about/previous-releases)
-[![Moodle](https://img.shields.io/badge/Moodle-2.5%20%E2%86%92%204.5+-F98012?logo=moodle&logoColor=white)](https://moodle.org/)
-[![Spec](https://img.shields.io/badge/Spec-JSON%20Schema%20%C2%B7%20OpenAPI%203.0-005571)](#schema-format)
-
-> Static AST-based extractor and typed contract catalog for **Moodle LMS Web Services**, requiring zero PHP runtime, Apache server, or database setup.
-
-```ts
-import { MoodleSchemaSync } from '@didactika/moodle-client-schemas';
-
-const syncer = new MoodleSchemaSync();
-await syncer.syncVersions();
-```
+> High-performance AST analysis and headless introspection engine to extract strict, strongly-typed JSON Schemas and parameter contracts for **Moodle LMS Web Services** across all versions (Moodle 2.0 to 5.x+) with **zero database, Apache server, or running Moodle instance required**.
 
 ---
 
-## Table of contents
+## Table of Contents
 
 - [Overview](#overview)
-- [Key features](#key-features)
-- [Compatibility](#compatibility)
+- [Key Features](#key-features)
 - [Installation](#installation)
-- [Engine architecture](#engine-architecture)
-  - [Extraction pipeline](#extraction-pipeline)
-  - [System modules](#system-modules)
-- [Static CDN consumption](#static-cdn-consumption)
-- [Schema format](#schema-format)
-- [Persistent AST cache (Content-Hashing)](#persistent-ast-cache-content-hashing)
-- [Development commands](#development-commands)
-- [Roadmap](#roadmap)
+- [Quick Start](#quick-start)
+- [API Reference](#api-reference)
+  - [`extractWebservice(options)`](#extractwebserviceoptions)
+  - [Specifying the Moodle Path (`moodlePath`)](#specifying-the-moodle-path-moodlepath)
+  - [Exported TypeScript Interface](#exported-typescript-interface)
+- [Usage Examples](#usage-examples)
+- [Architecture & Extraction Flow](#architecture--extraction-flow)
+  - [Pipeline Overview](#pipeline-overview)
+  - [Sandboxed PHP Adapter](#sandboxed-php-adapter)
+- [Service Filtering](#service-filtering)
+- [Development & Verification](#development--verification)
 - [Contributors](#contributors)
 - [License](#license)
 
@@ -43,34 +33,20 @@ await syncer.syncVersions();
 
 ## Overview
 
-Moodle includes hundreds of Web Services scattered across its core (`core_*`) and dozens of submodules and plugins (`mod_*`, `enrol_*`, `block_*`, etc.). However, it lacks native OpenAPI specifications or static, easily queryable per-version contracts.
+Moodle LMS contains hundreds of Web Services scattered across its core subsystem (`core_*`) and dozens of modular plugins (`mod_*`, `enrol_*`, `block_*`, `tool_*`, `auth_*`, `qtype_*`, etc.). Historically, retrieving their parameter contracts and return signatures required a running LAMP stack, an active database, and an authenticated administrator token.
 
-**`@didactika/moodle-client-schemas`** solves this by statically analyzing PHP source code using Abstract Syntax Trees (AST) in Node.js, producing formal **JSON Schema** and **OpenAPI 3.0** contracts ready to:
-* Generate TypeScript SDKs and strict types without un-typed API calls or `any` fallbacks.
-* Validate request parameters and responses before hitting the LMS server.
-* Power interactive API documentation and endpoint explorers across Moodle releases.
+**`@didactika/moodle-client-schemas`** is a standalone, purely computational library that extracts full parameter and return schemas directly from any local Moodle source code folder. It combines static Abstract Syntax Tree (AST) analysis via `php-parser` with an ephemeral, headless PHP reflection sandbox to generate pure, structured TypeScript schema objects in memory.
 
 ---
 
-## Key features
+## Key Features
 
-- 🌳 **Pure static AST analysis** — uses `php-parser` in Node.js to inspect PHP source code as plain text, eliminating the need to install or run Moodle.
-- ⚡ **Pre-AST dependency graph** — builds the reachable class and exporter graph before deep AST conversion to prune unneeded repository files.
-- 📦 **Content-hashed (MD5) AST cache** — perfect deduplication and rollback tolerance across versions managed via logical epochs (`registry.json`).
-- 🧩 **Exporter & inheritance support** — inspects `Exporter::get_read_structure()`, resolving `define_properties()`, `define_other_properties()`, and base class inheritance.
-- 🔍 **Multi-strategy class resolver** — locates class files via explicit `classpath`, PSR-4 / Frankenstyle namespaces, and legacy Moodle patterns (`externallib.php`).
-- 🏷️ **Strict type mapping** — translates Moodle constants (`PARAM_INT`, `PARAM_TEXT`, `VALUE_REQUIRED`, `external_single_structure`, etc.) to standard native types.
-- 🌐 **Serverless distribution** — prebuilt schemas ready for instant CDN consumption via jsDelivr or GitHub Pages.
-
----
-
-## Compatibility
-
-| Environment | Supported versions | Notes |
-|---|---|---|
-| **Node.js** | `20.x` · `22.x` · `24.x` | Active LTS releases |
-| **Moodle LMS** | `2.5` $\rightarrow$ `4.5+` | Legacy and modern Web Service structures |
-| **TypeScript** | `5.x` | Dual CJS + ESM + `.d.ts` builds via `tsup` |
+- ⚡ **Pure In-Memory Execution:** Completely ephemeral AST and reflection lifecycle. Zero persistent disk pollution or state leak between extractions.
+- 🎯 **Fine-Grained Service Filtering:** Extract all services (`['*']`), specific components (`['core_*']`, `['mod_assign_*']`), or individual webservice names (`['core_user_get_users']`).
+- 🚀 **High-Throughput Concurrency:** Multi-process parallel introspection powered by worker concurrency control (700+ webservices introspected in seconds).
+- 🔍 **Multi-Strategy Class Resolution:** Seamlessly handles Frankenstyle PSR-4 namespaces, explicit classpaths (`enrol/externallib.php`, `backup/externallib.php`), legacy monolithic classes (`grades_external.php`), and Moodle 5+ structures (`lib/external/externallib.php`).
+- 🛡️ **Headless Mock Runtime:** Fully isolated PHP execution environment that mocks globals (`$CFG`, `$DB`, `$PAGE`, `$USER`), normalizes syntax differences, and uses JIT autoloading to resolve classes without requiring database connections.
+- 📦 **Strongly-Typed Contracts:** Emits strongly typed AST schema trees (`ObjectSchemaNode`, `ArraySchemaNode`, `ValueSchemaNode`) with Moodle `PARAM_*` type descriptions.
 
 ---
 
@@ -80,164 +56,445 @@ Moodle includes hundreds of Web Services scattered across its core (`core_*`) an
 npm install @didactika/moodle-client-schemas
 ```
 
----
-
-## Engine architecture
-
-### Extraction pipeline
-
-```text
-                     MOODLE SOURCE
-                          │
-                          ▼
-                 **/db/services.php
-                          │
-                          ▼
-                   Directed Scanner
-                          │
-                          ▼
-              AST Parser (php-parser) ◄───► Content-Hash Cache (MD5)
-                          │
-                          ▼
-                 Service Extractor ($functions)
-                          │
-                          ▼
-            Class Resolver (Classpath | PSR-4 | Legacy)
-                          │
-                          ▼
-                  Dependency Graph ──► Repository Pruning (KEEP SET)
-                          │
-                          ▼
-                  Schema Extractor
-                   ├── Direct Schema (external_single_structure / external_value)
-                   └── Exporter Extractor (get_read_structure -> define_properties)
-                          │
-                          ▼
-             JSON Schema / OpenAPI 3.0 Generator
-```
-
-### System modules
-
-| Module | Responsibility |
-|---|---|
-| **Scanner** (`src/scanner/`) | Discovers `**/db/services.php` entry points, ignoring `vendor/`, `node_modules/`, and `.git/`. Returns `ServiceFile { path, component }`. |
-| **Parser** (`src/parser/`) | Converts PHP source files to AST on demand to minimize memory overhead. |
-| **Service Extractor** (`src/service-extractor/`) | Parses `$functions` arrays from `services.php` (`name`, `classname`, `methodname` with fallback to `'execute'`, `description`). |
-| **Class Resolver** (`src/resolver/`) | Resolves physical file paths using explicit `classpath`, PSR-4 namespaces, or `externallib.php`. |
-| **Dependency Graph** (`src/graph/`) | Tracks reachable files (`service`, `external`, `exporter`, `helper`, `include`) to safely prune unused files. |
-| **Schema Extractor** (`src/extractor/`) | Extracts `_parameters()` and `_returns()` into an intermediate structured representation (`SchemaNode`). |
-| **AST Cache** (`src/cache/`) | Stores MD5-hashed serialized ASTs and runs epoch-based garbage collection (`MAX_EPOCH_AGE`). |
-| **Orchestrator** (`src/orchestrator/`) | Coordinates multi-phase execution, queues pending files, and outputs the final contract. |
+*Requirements:* Node.js `>= 20.0.0` and PHP CLI `>= 7.4` on the host system.
 
 ---
 
-## Static CDN consumption
+## Quick Start
 
-Pre-extracted schemas are published statically and can be consumed directly by version:
+```typescript
+import {
+    extractWebservice,
+    ExtractWebserviceResult,
+    WebServiceSchema,
+    WebServiceExtractionError
+} from '@didactika/moodle-client-schemas';
 
-```http
-# Schema for Moodle 4.5
-https://cdn.jsdelivr.net/gh/didactika/moodle-client-schemas@main/schemas/v/4.5.json
+async function main() {
+    // Extract all core and forum webservices from a local Moodle source directory
+    const { schemas, errors }: ExtractWebserviceResult = await extractWebservice({
+        moodlePath: '~/tmp/moodle',
+        services: ['core_user_*', 'mod_forum_get_forum_access_information'],
+        concurrency: 16
+    });
 
-# Schema for Moodle 4.4
-https://cdn.jsdelivr.net/gh/didactika/moodle-client-schemas@main/schemas/v/4.4.json
+    console.log(`Successfully extracted ${schemas.length} webservices.`);
+    for (const schema of schemas) {
+        console.log(`- Webservice: ${schema.name}`);
+    }
+
+    if (errors.length > 0) {
+        console.warn(`Encountered ${errors.length} extraction warnings/errors:`);
+        for (const err of errors) {
+            console.warn(`  [${err.code ?? 'ERROR'}] ${err.serviceName ?? 'General'}: ${err.message}`);
+        }
+    }
+}
+
+main().catch(console.error);
 ```
 
 ---
 
-## Schema format
+## API Reference
 
-Each version file (`schemas/v/{version}.json`) contains structured Web Service definitions:
+### `extractWebservice(options)`
+
+The primary entry point of the library. Validates the environment, scans the specified Moodle repository, resolves class files, introspects method signatures, and returns typed schema objects alongside any structured error diagnostics.
+
+```typescript
+function extractWebservice(options: ExtractWebserviceOptions): Promise<ExtractWebserviceResult>;
+```
+
+#### `ExtractWebserviceOptions`
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `moodlePath` | `string` | *Required* | Absolute or relative path to the local Moodle source codebase (supports `~` expansion). |
+| `services` | `string[]` | `['*']` | Filter list of webservices to extract. Supports exact names (`'core_user_get_users'`) and wildcard prefixes (`'core_*'`, `'mod_assign_*'`). Pass `['*']` or omit to extract all available webservices. |
+| `concurrency` | `number` | `8` | Maximum number of concurrent PHP introspection sub-processes. |
+
+---
+
+### Specifying the Moodle Path (`moodlePath`)
+
+The `moodlePath` option specifies the local filesystem directory containing the target Moodle codebase. The library automatically normalizes and resolves all path formats:
+
+1. **System Absolute Path:**
+   ```typescript
+   await extractWebservice({
+       moodlePath: '/var/www/moodle'
+   });
+   ```
+
+2. **Home Directory Path (`~` expansion):**
+   ```typescript
+   await extractWebservice({
+       moodlePath: '~/tmp/moodle'
+   });
+   ```
+
+3. **Relative Path (relative to the current working directory):**
+   ```typescript
+   await extractWebservice({
+       moodlePath: './moodle-source'
+   });
+   ```
+
+4. **Multi-level Relative Path (navigating parent directories):**
+   ```typescript
+   await extractWebservice({
+       moodlePath: '../../external/moodle/5.1'
+   });
+   ```
+
+> **Moodle 5+ Support:** The library automatically detects standard Moodle layouts as well as modern Moodle 5+ structures containing a `public/` web root (e.g. `/path/to/moodle/public/lib`), resolving all component paths transparently without extra configuration.
+
+---
+
+### Exported TypeScript Interfaces
+
+The library exports the primary data contracts representing extracted webservice schemas and diagnostic errors:
+
+```typescript
+import {
+    extractWebservice,
+    ExtractWebserviceOptions,
+    ExtractWebserviceResult,
+    WebServiceSchema,
+    WebServiceExtractionError,
+    WebServiceErrorCode,
+    WebServiceParametersSchema,
+    WebServiceReturnSchema,
+    WebServiceObjectSchema,
+    WebServiceArraySchema,
+    WebServiceValueSchema,
+    WebServiceBaseSchema,
+    WebServiceSchemaKind
+} from '@didactika/moodle-client-schemas';
+```
+
+#### `ExtractWebserviceResult`
+
+The structured result returned by `extractWebservice`:
+
+```typescript
+export interface ExtractWebserviceResult {
+    /** List of successfully extracted and normalized Web Service schemas */
+    schemas: WebServiceSchema[];
+    /** List of non-fatal errors or skipped services encountered during execution */
+    errors: WebServiceExtractionError[];
+}
+```
+
+#### `WebServiceExtractionError`
+
+Detailed error information for environment issues or individual unresolvable webservices:
+
+```typescript
+export type WebServiceErrorCode =
+    | 'INVALID_MOODLE_PATH'
+    | 'PHP_NOT_FOUND'
+    | 'PHP_VERSION_UNSUPPORTED'
+    | 'SERVICE_NOT_FOUND'
+    | 'CLASS_NOT_FOUND'
+    | 'INTROSPECTION_FAILED'
+    | 'PERMISSION_DENIED';
+
+export interface WebServiceExtractionError {
+    /** Target Web Service function name if applicable */
+    serviceName?: string;
+    /** Target PHP class name if applicable */
+    classname?: string;
+    /** Target PHP class file path if applicable */
+    classFile?: string;
+    /** Standardized error category code */
+    code?: WebServiceErrorCode;
+    /** Human-readable explanation of what failed */
+    message: string;
+    /** Raw underlying error message or stack trace */
+    cause?: string;
+}
+```
+
+#### `WebServiceSchema`
+
+The final structured contract for an extracted Moodle Web Service:
+
+```typescript
+export interface WebServiceSchema {
+    /** Webservice function name (e.g. 'core_user_get_users') */
+    name: string;
+    /** Human-readable description extracted from services.php or docblocks */
+    description?: string;
+    /** Parameter contract structure (maps to external_function_parameters) */
+    parameters: WebServiceParametersSchema | null;
+    /** Return value contract structure (maps to external_description) */
+    returns: WebServiceReturnSchema | null;
+}
+```
+
+#### Schema Structure Hierarchy
+
+Moodle Web Service parameters and returns are modeled as recursive typed schema definitions:
+
+```typescript
+/** Base attributes shared across all schema node types */
+export interface WebServiceBaseSchema {
+    kind?: WebServiceSchemaKind;
+    desc?: string;
+    description?: string;
+    required?: number;
+    default?: unknown;
+    allownull?: boolean;
+}
+
+/** Primitive leaf value schema (e.g., PARAM_INT, PARAM_TEXT, PARAM_BOOL) */
+export interface WebServiceValueSchema extends WebServiceBaseSchema {
+    kind?: 'value';
+    /** Moodle parameter type constant (e.g. 'PARAM_INT', 'PARAM_TEXT', 'PARAM_RAW') */
+    type: string;
+}
+
+/** Associative object structure with property keys (maps to external_single_structure) */
+export interface WebServiceObjectSchema extends WebServiceBaseSchema {
+    kind?: 'parameters' | 'object';
+    /** Map of property names to child schemas */
+    keys: Record<string, WebServiceReturnSchema>;
+}
+
+/** Parameter structure schema root (maps to external_function_parameters) */
+export type WebServiceParametersSchema = WebServiceObjectSchema;
+
+/** Array list structure containing homogeneous items (maps to external_multiple_structure) */
+export interface WebServiceArraySchema extends WebServiceBaseSchema {
+    kind?: 'array';
+    /** Schema node definition of the elements contained in the array */
+    content: WebServiceReturnSchema;
+}
+
+/** Return schema union representing any valid Moodle return structure */
+export type WebServiceReturnSchema =
+    | WebServiceValueSchema
+    | WebServiceObjectSchema
+    | WebServiceArraySchema;
+```
+
+#### Schema Field Dictionary
+
+Every schema node contains descriptive metadata derived directly from Moodle's internal `external_description` reflection API:
+
+| Field | Type | Description |
+|---|---|---|
+| `kind` | `'parameters' \| 'object' \| 'array' \| 'value'` | Structural classification of the node in the schema tree. |
+| `description` | `string` | **Human-readable parameter description** written by the Moodle core/plugin author (maps to `$this->desc` in PHP). |
+| `type` | `string` | Moodle sanitation constant (e.g., `PARAM_INT`, `PARAM_TEXT`, `PARAM_RAW`, `PARAM_BOOL`, `PARAM_EMAIL`, `PARAM_USERNAME`, `PARAM_ALPHANUM`). |
+| `required` | `number` | Requirement rule defined by Moodle constants:<br>• `1` (`VALUE_REQUIRED`): Mandatory parameter.<br>• `2` (`VALUE_OPTIONAL`): Optional parameter.<br>• `0` (`VALUE_DEFAULT`): Parameter has a fallback default value. |
+| `default` | `unknown` | Fallback value used by Moodle when an optional parameter is omitted by the caller. |
+| `allownull` | `boolean` | Indicates whether `null` is explicitly permitted (`NULL_ALLOWED = true`, `NULL_NOT_ALLOWED = false`). |
+| `keys` | `Record<string, WebServiceReturnSchema>` | Dictionary mapping property names to their child schemas for `object` and `parameters` nodes. |
+| `content` | `WebServiceReturnSchema` | Definition of the element schema for homogeneous `array` nodes. |
+
+#### Concrete Schema Example
+
+Here is how an extracted `core_user_create_users` schema looks in runtime memory:
 
 ```json
-[
-  {
-    "name": "core_user_create_users",
-    "description": "Create one or more users in Moodle",
-    "parameters": {
+{
+  "name": "core_user_create_users",
+  "description": "Create users in Moodle",
+  "parameters": {
+    "kind": "parameters",
+    "keys": {
       "users": {
-        "type": "array",
-        "required": true,
-        "description": "Users list",
-        "items": {
-          "type": "object",
-          "properties": {
-            "username": { "type": "string", "required": true },
-            "password": { "type": "string", "required": true },
-            "firstname": { "type": "string", "required": true },
-            "lastname": { "type": "string", "required": true },
-            "email": { "type": "string", "required": true },
-            "auth": { "type": "string", "required": false, "default": "manual" }
+        "kind": "array",
+        "description": "List of user objects to create",
+        "required": 1,
+        "content": {
+          "kind": "object",
+          "keys": {
+            "username": {
+              "kind": "value",
+              "type": "PARAM_USERNAME",
+              "description": "Username in lowercase",
+              "required": 1
+            },
+            "password": {
+              "kind": "value",
+              "type": "PARAM_RAW",
+              "description": "Plain text password",
+              "required": 1
+            },
+            "email": {
+              "kind": "value",
+              "type": "PARAM_EMAIL",
+              "description": "User valid email address",
+              "required": 1
+            }
           }
         }
       }
-    },
-    "returns": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "properties": {
-          "id": { "type": "integer", "required": true, "description": "User ID" },
-          "username": { "type": "string", "required": true, "description": "Username" }
+    }
+  },
+  "returns": {
+    "kind": "array",
+    "description": "List of created user identifiers",
+    "content": {
+      "kind": "object",
+      "keys": {
+        "id": {
+          "kind": "value",
+          "type": "PARAM_INT",
+          "description": "Created user ID"
+        },
+        "username": {
+          "kind": "value",
+          "type": "PARAM_USERNAME",
+          "description": "Username"
         }
       }
     }
   }
-]
+}
 ```
 
 ---
 
-## Persistent AST cache (Content-Hashing)
+## Usage Examples
 
-To accelerate multi-version runs and support code rollbacks (`git revert`), the engine uses a pure content-hash strategy:
+### 1. Extract All Web Services in the Repository
 
-1. **MD5 Content Hashing:** Cache keys are calculated strictly from the plain PHP file contents.
-2. **Pure Data Files:** `.ast_cache/<hash>.json` files store pure serialized AST without injected metadata.
-3. **Epoch Registry (`registry.json`):** A logical clock (`currentEpoch`) tracks when each hash was last accessed; an epoch cleaner removes entries exceeding `MAX_EPOCH_AGE`.
+```typescript
+import { extractWebservice } from '@didactika/moodle-client-schemas';
+
+const schemas = await extractWebservice({
+    moodlePath: '/var/www/moodle'
+});
+
+console.log(`Successfully extracted ${schemas.length} webservices.`);
+```
+
+### 2. Filter by Component Prefix with Wildcards
+
+```typescript
+const schemas = await extractWebservice({
+    moodlePath: '~/moodle',
+    services: [
+        'core_user_*',
+        'core_course_*',
+        'mod_forum_*',
+        'mod_assign_*'
+    ]
+});
+```
+
+### 3. Extract Specific Web Services by Exact Name
+
+```typescript
+const schemas = await extractWebservice({
+    moodlePath: './moodle',
+    services: [
+        'core_user_get_users',
+        'core_enrol_get_users_courses',
+        'mod_forum_get_forum_access_information'
+    ]
+});
+```
+
+### 4. High-Throughput Parallel Processing
+
+For large Moodle installations with 700+ webservices, set `concurrency` to utilize available CPU cores:
+
+```typescript
+const schemas = await extractWebservice({
+    moodlePath: '/var/www/moodle',
+    services: ['*'],
+    concurrency: 16 // Uses 16 parallel PHP introspection workers
+});
+```
 
 ---
 
-## Development commands
+## Architecture & Extraction Flow
+
+### Pipeline Overview
+
+```
+                      Local Moodle Repository
+                                 │
+                                 ▼
+                     Scanner (**/db/services.php)
+                                 │
+                                 ▼
+                   In-Memory AST Parser (php-parser)
+                                 │
+                                 ▼
+              ServiceExtractor (Declared $functions)
+                                 │
+                                 ▼
+                 Service Filter (['*'], ['core_*'])
+                                 │
+                                 ▼
+             ClassResolver (PSR-4 / Classpath / Legacy)
+                                 │
+                                 ▼
+         Headless PHP Adapter (cli-executor + JIT Autoloader)
+                                 │
+                                 ▼
+             Typed WebServiceSchema[] (Pure JSON in RAM)
+```
+
+1. **Scanner:** Recursively discovers all `**/db/services.php` entry points, ignoring irrelevant folders (`node_modules`, `vendor`, `.git`, `cache`).
+2. **In-Memory AST Parser:** Parses PHP files into AST representations using `php-parser` and caches nodes in RAM during the extraction lifecycle.
+3. **Service Extractor:** Analyzes AST arrays to extract declared `$functions` configurations, normalizing modern Moodle 4.x/5.x rules (such as optional `methodname` defaulting to `'execute'`).
+4. **Class Resolver:** Multi-tier path discovery:
+   - **Explicit Classpath:** Directly resolves explicit `classpath` attributes relative to repository root.
+   - **Modern PSR-4:** Resolves component namespaces using `lib/components.json` or `core_component` class mapping.
+   - **Subplugin Hierarchy:** Dynamically discovers subplugin directories from `db/subplugins.json`.
+   - **Core Subsystems:** Locates subsystem handlers in `lib/classes/*_external.php` or modern `lib/external/externallib.php`.
+5. **Sandboxed PHP Introspector:** Spawns worker sub-processes via `p-limit` executing `cli-executor.php` against `headless-bootstrap.php`, invoking `classname::methodname_parameters()` and `classname::methodname_returns()`.
+
+---
+
+## Service Filtering
+
+You can pass precise service filters to optimize performance and extract only what your application requires:
+
+```typescript
+// 1. Extract EVERYTHING
+await extractWebservice({ moodlePath: './moodle', services: ['*'] });
+
+// 2. Extract specific subsystems
+await extractWebservice({ moodlePath: './moodle', services: ['core_course_*', 'core_user_*'] });
+
+// 3. Extract exact individual functions
+await extractWebservice({
+    moodlePath: './moodle',
+    services: [
+        'core_enrol_get_users_courses',
+        'mod_quiz_get_user_attempts'
+    ]
+});
+```
+
+---
+
+## Development & Verification
+
+The codebase strictly enforces ESLint rules, TypeScript strict typing, and a maximum cyclomatic complexity of $\le 3$ per function:
 
 ```bash
-# Install dependencies
-npm install
-
-# Build dual CJS + ESM package with .d.ts declarations
-npm run build
-
-# Lint code and enforce complexity rules (<= 3)
-npm run lint
-
-# Auto-fix linting issues and enforce curly braces
-npm run lint:fix
-
-# Type check TypeScript codebase
-npm run typecheck
-
-# Run unit and integration tests
-npm run test:unit
-npm run test:integration
-
-# Full verification (lint + typecheck + test)
-npm test
+npm run build      # Compile dual CJS/ESM distribution and TypeScript declarations (.d.ts)
+npm run lint       # Validate code style, complexity <= 3, and zero unused variables
+npm run typecheck  # Validate types with tsc --noEmit
+npm test           # Run full verification (lint + typecheck + 23 unit & integration test suites)
 ```
-
----
-
-## Roadmap
-
-- [x] Static AST extractor for Core and Plugin Web Services.
-- [x] Exporter support and class inheritance resolution.
-- [x] Content-hashed AST cache with epoch-based cleaner.
-- [ ] **Dynamic URL Client SDK (Planned):** Ability to instantiate a client with a remote Moodle instance URL and token (`new MoodleClient({ url, token })`) to extract, discover, and validate schemas for customized Moodle deployments.
 
 ---
 
 ## Contributors
 
-Thanks to the contributors of this project:
+Contributions, issues, and feature requests are welcome!
 
 * **Eduardo Cubias** ([@Eduardo-Cubiasss](https://github.com/Eduardo-Cubiasss))
 * **Hector Arrechea** ([@hectorlazaroarrechea](https://github.com/hectorlazaroarrechea))
@@ -246,4 +503,4 @@ Thanks to the contributors of this project:
 
 ## License
 
-This project is licensed under the [MIT](LICENSE) License — © [Didactika - Educational Technology Open Source](https://github.com/didactika).
+[MIT](LICENSE) © [Didactika - Educational Technology Open Source](https://github.com/didactika)

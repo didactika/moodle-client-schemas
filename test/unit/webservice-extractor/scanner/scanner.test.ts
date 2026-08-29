@@ -1,231 +1,38 @@
-import child_process from 'child_process';
-import { findFiles, trimPhpFunction } from '../../../../src/webservice-extractor/scanner/scanner';
+import path from 'path';
+import { findFiles, findFirstFile, trimPhpFunction } from '../../../../src/webservice-extractor/scanner/scanner';
 
-jest.mock('child_process');
-
-describe('Unit Test: scanner (Functions)', () => {
-
-    afterEach(() => {
-        jest.clearAllMocks();
-    });
+describe('Unit Test: scanner (Cross-Platform Node.js Filesystem Walker)', () => {
 
     describe('findFiles', () => {
 
-        it('should execute command with a single path pattern', async () => {
-            const basePath = './src/tmp/moodle/v/4.5';
-            const pathPattern = '*/db/services.php';
+        it('should discover service files in fixtures matching glob pattern', async () => {
+            const fixturePath = path.resolve('./test/fixtures/mock_moodle');
+            const results = await findFiles(fixturePath, ['*/db/services.php']);
 
-            const mockFiles = [
-                './src/tmp/moodle/v/4.5/user/db/services.php',
-                './src/tmp/moodle/v/4.5/mod/forum/db/services.php'
-            ];
-
-            (child_process.exec as unknown as jest.Mock).mockImplementation((
-                command: string,
-                callback: (
-                    error: Error | null,
-                    result: { stdout: string; stderr: string }
-                ) => void
-            ) => {
-                expect(command).toContain(`find ${basePath}`);
-                expect(command).toContain(`-path "${pathPattern}"`);
-
-                callback(null, {
-                    stdout: mockFiles.join('\n') + '\n',
-                    stderr: ''
-                });
-            });
-
-            const result = await findFiles(basePath, [pathPattern]);
-
-            expect(result).toEqual(mockFiles);
+            expect(results.length).toBeGreaterThanOrEqual(1);
+            expect(results.some(r => r.endsWith('services.php'))).toBe(true);
         });
 
-        it('should allow overriding pathPatterns and ignoredDirs', async () => {
-            const basePath = './src/tmp/moodle/v/4.5';
-            const pathPatterns = ['**/classes/external/*.php'];
-            const customIgnored = ['vendor', 'node_modules'];
+        it('should return empty array when path does not exist', async () => {
+            const nonExistent = path.resolve('./non_existent_folder_xyz');
+            const results = await findFiles(nonExistent, ['*/db/services.php']);
 
-            const mockFiles = [
-                './src/tmp/moodle/v/4.5/mod/forum/classes/external/discussion_list.php'
-            ];
-
-            (child_process.exec as unknown as jest.Mock).mockImplementation((
-                command: string,
-                callback: (
-                    error: Error | null,
-                    result: { stdout: string; stderr: string }
-                ) => void
-            ) => {
-                expect(command).toContain(
-                    `-path "${pathPatterns[0]}"`
-                );
-
-                expect(command).toContain(
-                    '-name "vendor" -o -name "node_modules"'
-                );
-
-                callback(null, {
-                    stdout: mockFiles.join('\n') + '\n',
-                    stderr: ''
-                });
-            });
-
-            const result = await findFiles(
-                basePath,
-                pathPatterns,
-                customIgnored
-            );
-
-            expect(result).toEqual(mockFiles);
+            expect(results).toEqual([]);
         });
 
-        it('should allow scanning with multiple path patterns simultaneously', async () => {
-            const basePath = './src/tmp/moodle/v/4.5';
+        it('should support findFirstFile', async () => {
+            const fixturePath = path.resolve('./test/fixtures/mock_moodle');
+            const result = await findFirstFile(fixturePath, 'services.php');
 
-            const pathPatterns = [
-                '*/db/services.php',
-                '*/classes/external/*.php'
-            ];
-
-            const mockFiles = [
-                './src/tmp/moodle/v/4.5/user/db/services.php',
-                './src/tmp/moodle/v/4.5/mod/forum/db/services.php',
-                './src/tmp/moodle/v/4.5/mod/forum/classes/external/discussion_list.php'
-            ];
-
-            (child_process.exec as unknown as jest.Mock).mockImplementation((
-                command: string,
-                callback: (
-                    error: Error | null,
-                    result: { stdout: string; stderr: string }
-                ) => void
-            ) => {
-                expect(command).toContain(`find ${basePath}`);
-                expect(command).toContain('-path "*/db/services.php"');
-                expect(command).toContain('-path "*/classes/external/*.php"');
-                expect(command).toContain(' -o ');
-
-                callback(null, {
-                    stdout: mockFiles.join('\n') + '\n',
-                    stderr: ''
-                });
-            });
-
-            const result = await findFiles(
-                basePath,
-                pathPatterns
-            );
-
-            expect(result).toEqual(mockFiles);
+            expect(result).toBeDefined();
+            expect(result).toContain('services.php');
         });
 
-        it('should allow scanning without pruning any directory when ignoredDirs is empty', async () => {
-            const basePath = './src/tmp/moodle/v/4.5';
-            const pathPattern = '*/db/services.php';
+        it('should return null when findFirstFile finds nothing', async () => {
+            const fixturePath = path.resolve('./test/fixtures/mock_moodle');
+            const result = await findFirstFile(fixturePath, 'totally_non_existent_file.xyz');
 
-            const mockFiles = [
-                './src/tmp/moodle/v/4.5/user/db/services.php',
-                './src/tmp/moodle/v/4.5/vendor/some_package/db/services.php'
-            ];
-
-            (child_process.exec as unknown as jest.Mock).mockImplementation((
-                command: string,
-                callback: (
-                    error: Error | null,
-                    result: { stdout: string; stderr: string }
-                ) => void
-            ) => {
-                expect(command).toContain(`find ${basePath}`);
-                expect(command).toContain('-type f');
-                expect(command).toContain(`-path "${pathPattern}"`);
-                expect(command).not.toContain('-prune');
-
-                callback(null, {
-                    stdout: mockFiles.join('\n') + '\n',
-                    stderr: ''
-                });
-            });
-
-            const result = await findFiles(
-                basePath,
-                [pathPattern],
-                []
-            );
-
-            expect(result).toEqual(mockFiles);
-        });
-
-        it('should return empty array when no results are found', async () => {
-            const basePath = './src/tmp/moodle/v/4.5';
-
-            const pathPatterns = [
-                '*/db/services.php',
-                '*/classes/external/*.php'
-            ];
-
-            (child_process.exec as unknown as jest.Mock).mockImplementation((
-                _command: string,
-                callback: (
-                    error: Error | null,
-                    result: { stdout: string; stderr: string }
-                ) => void
-            ) => {
-                callback(null, {
-                    stdout: '',
-                    stderr: ''
-                });
-            });
-
-            const result = await findFiles(
-                basePath,
-                pathPatterns
-            );
-
-            expect(result).toEqual([]);
-        });
-
-        it('should capture execution errors, log error and return empty array', async () => {
-            const consoleSpy = jest
-                .spyOn(console, 'error')
-                .mockImplementation(() => {});
-
-            const basePath = 'invalid/path';
-
-            const pathPatterns = [
-                '*/db/services.php',
-                '*/classes/external/*.php'
-            ];
-
-            (child_process.exec as unknown as jest.Mock).mockImplementation((
-                _command: string,
-                callback: (
-                    error: Error | null,
-                    result: { stdout: string; stderr: string }
-                ) => void
-            ) => {
-                callback(
-                    new Error('Command failed'),
-                    {
-                        stdout: '',
-                        stderr: 'Error'
-                    }
-                );
-            });
-
-            const result = await findFiles(
-                basePath,
-                pathPatterns
-            );
-
-            expect(result).toEqual([]);
-
-            expect(consoleSpy).toHaveBeenCalledWith(
-                'Error during file scanning phase:',
-                expect.any(Error)
-            );
-
-            consoleSpy.mockRestore();
+            expect(result).toBeNull();
         });
 
     });

@@ -47,7 +47,7 @@ describe('Integration Flow: extractWebservice (Functional Pipeline)', () => {
         };
         (PhpSignatureExtractor.extractWebserviceSignature as jest.Mock).mockResolvedValue(mockSignature);
 
-        const schemas = await extractWebservice({
+        const { schemas, errors } = await extractWebservice({
             moodlePath,
             services: ['*']
         });
@@ -63,6 +63,7 @@ describe('Integration Flow: extractWebservice (Functional Pipeline)', () => {
             methodname: 'get_items'
         });
 
+        expect(errors).toHaveLength(0);
         expect(schemas).toEqual([
             {
                 name: 'mod_sample_get_items',
@@ -73,7 +74,7 @@ describe('Integration Flow: extractWebservice (Functional Pipeline)', () => {
         ]);
     });
 
-    it('should handle unresolvable service classes by omitting them from final result', async () => {
+    it('should handle unresolvable service classes by recording an error entry', async () => {
         const moodlePath = path.resolve('./test/fixtures/mock_moodle');
 
         (Scanner.findFiles as jest.Mock).mockResolvedValue(['./test/fixtures/mock_moodle/unknown/db/services.php']);
@@ -86,10 +87,13 @@ describe('Integration Flow: extractWebservice (Functional Pipeline)', () => {
         (ServiceExtractor.extractServices as jest.Mock).mockReturnValue([unresolvableService]);
         (ClassResolver.resolveClass as jest.Mock).mockResolvedValue(null);
 
-        const schemas = await extractWebservice({ moodlePath });
+        const { schemas, errors } = await extractWebservice({ moodlePath });
 
         expect(PhpSignatureExtractor.extractWebserviceSignature).not.toHaveBeenCalled();
         expect(schemas).toHaveLength(0);
+        expect(errors).toHaveLength(1);
+        expect(errors[0].code).toBe('CLASS_NOT_FOUND');
+        expect(errors[0].serviceName).toBe('unknown_service');
     });
 
 });

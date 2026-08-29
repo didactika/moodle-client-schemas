@@ -24,8 +24,10 @@ dist-ssr
 *.sw?
 .env
 
-# Temporary downloaded repositories
+# Temporary downloaded repositories and schemas
 tmp
+.ast_cache/
+schemas/
 
 # testing
 coverage/

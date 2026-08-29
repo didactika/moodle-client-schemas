@@ -32,3 +32,8 @@ export interface ComponentMapRegistry {
     plugintypes: Map<string, string>;
     subsystems: Map<string, string>;
 }
+
+/**
+ * Alias for ComponentMapRegistry.
+ */
+export type ComponentRegistry = ComponentMapRegistry;
