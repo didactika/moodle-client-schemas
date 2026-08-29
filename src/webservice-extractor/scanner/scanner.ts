@@ -65,6 +65,30 @@ export async function findFiles(
 }
 
 /**
+ * Discovers the first matching file for a relative target pattern across the base directory.
+ *
+ * @example
+ * ```ts
+ * await findFirstFile('/var/www/moodle', 'version.php');
+ * ```
+ *
+ * @param {string} basePath - Directory to start search from.
+ * @param {string} relativeTarget - Relative target file or path.
+ * @returns {Promise<string | null>} First matched file path or null.
+ */
+export async function findFirstFile(
+    basePath: string,
+    relativeTarget: string
+): Promise<string | null> {
+    const patterns = [`*${relativeTarget}`, `*/${relativeTarget}`, `*/*/${relativeTarget}`];
+    const results = await findFiles(basePath, patterns);
+    if (results.length > 0) {
+        return results[0];
+    }
+    return null;
+}
+
+/**
  * Finds the start character index of a function definition by name.
  *
  * @param {string} source - PHP source code.

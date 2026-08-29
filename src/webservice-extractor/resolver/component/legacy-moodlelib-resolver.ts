@@ -316,16 +316,27 @@ function parseTrimmedSnippet(trimmedSource: string): unknown {
     return parser.parse(trimmedSource);
 }
 
+import { findFirstFile } from '../../scanner/scanner';
+
 /**
- * Reads source code of legacy moodlelib.php file.
+ * Reads source code of legacy moodlelib.php file directly or via dynamic pattern search.
  *
- * @param {string} filePath - Path to file.
- * @returns {Promise<string>} File content.
+ * @param {string} moodlePath - Path to Moodle repository.
+ * @returns {Promise<{ raw: string; filePath: string }>} File content and resolved path.
  */
-function readMoodlelibSource(filePath: string): Promise<string> {
-    return fs.readFile(filePath, 'utf-8').catch(() => {
-        throw new Error(`Unable to load legacy moodlelib from ${filePath}`);
-    });
+async function readMoodlelibSource(moodlePath: string): Promise<{ raw: string; filePath: string }> {
+    const directPath = path.join(moodlePath, 'lib/moodlelib.php');
+    try {
+        const raw = await fs.readFile(directPath, 'utf-8');
+        return { raw, filePath: directPath };
+    } catch {
+        const found = await findFirstFile(moodlePath, 'lib/moodlelib.php');
+        if (found) {
+            const raw = await fs.readFile(found, 'utf-8');
+            return { raw, filePath: found };
+        }
+        throw new Error(`Unable to load legacy moodlelib from ${directPath}`);
+    }
 }
 
 /**
@@ -363,10 +374,9 @@ function getFunctionNodeFromAst(ast: unknown, filePath: string): PhpFunction {
  * @returns {Promise<Map<string, string>>} Component to directory mapping.
  */
 export async function resolveLegacyMoodlelibComponents(moodlePath: string): Promise<Map<string, string>> {
-    const filePath = path.join(moodlePath, 'lib/moodlelib.php');
-    const rawContent = await readMoodlelibSource(filePath);
+    const { raw, filePath } = await readMoodlelibSource(moodlePath);
 
-    const trimmed = trimPhpFunction(rawContent, 'get_plugin_types');
+    const trimmed = trimPhpFunction(raw, 'get_plugin_types');
     if (!trimmed) {
         throw new Error(`Unable to locate get_plugin_types function in moodlelib.php at ${filePath}`);
     }

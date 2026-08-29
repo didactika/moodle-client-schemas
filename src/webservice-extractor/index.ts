@@ -1,35 +1,66 @@
 import path from 'path';
-import { ExtractorConfig, ExtractorResult } from './interfaces/extractor.interfaces';
+import pLimit from 'p-limit';
 import { MoodleService } from './interfaces/service-extractor.interfaces';
 import { WebServiceSchema } from './interfaces/schema-extractor.interfaces';
 import { WebserviceSignature } from './interfaces/signature.interfaces';
 
 import { findFiles } from './scanner/scanner';
-import { getAst } from './cache/ast-manager';
+import { getAst, clearAstCache } from './cache/ast-manager';
 import { extractServices } from './extractor/service-extractor';
-import { resolveVersion } from './resolver/version-resolver';
-import { isVersionGreaterOrEqual, normalizeVersion } from './utils/version-utils';
 import { resolveClass } from './resolver/class-resolver';
 import { extractWebserviceSignature } from './adapter/php-signature-extractor';
-import { saveJson } from './generator/json-generator';
+import { cleanupPhpRuntime } from './adapter/php-runtime';
+
+export interface ExtractWebserviceOptions {
+    /** Root directory path of the target Moodle codebase */
+    moodlePath: string;
+    /**
+     * Filter list of webservices to extract.
+     * Pass ['*'] or omit to extract all available webservices.
+     * Supports exact service names or wildcard patterns (e.g. 'core_user_*').
+     */
+    services?: string[];
+    /** Concurrency limit for parallel signature extraction (default: 8) */
+    concurrency?: number;
+}
 
 /**
- * Validates whether the repository Moodle version meets the minimum supported version (1.9).
+ * Checks if a service name matches a wildcard prefix filter.
  *
- * @example
- * ```ts
- * const supported = await isVersionSupported('/var/www/moodle');
- * if (!supported) {
- *     console.log('Skipping unsupported Moodle version');
- * }
- * ```
- *
- * @param {string} moodlePath - Root path of the Moodle repository.
- * @returns {Promise<boolean>} True if Moodle version is 1.9 or higher.
+ * @param {string} name - Service name.
+ * @param {string} filter - Filter pattern.
+ * @returns {boolean} True if matching prefix.
  */
-async function isVersionSupported(moodlePath: string): Promise<boolean> {
-    const version = await resolveVersion(moodlePath);
-    return isVersionGreaterOrEqual(version, '1.9');
+function isPrefixMatch(name: string, filter: string): boolean {
+    return filter.endsWith('*') && name.startsWith(filter.slice(0, -1));
+}
+
+/**
+ * Checks if a service name matches a single filter string pattern.
+ *
+ * @param {string} name - Service name.
+ * @param {string} filter - Filter pattern.
+ * @returns {boolean} True if matching.
+ */
+function isMatch(name: string, filter: string): boolean {
+    if (filter === '*' || filter === name) {
+        return true;
+    }
+    return isPrefixMatch(name, filter);
+}
+
+/**
+ * Checks if a service name matches any of the supplied filter patterns.
+ *
+ * @param {string} serviceName - Name of the service to check.
+ * @param {string[]} [filters] - Optional filter array.
+ * @returns {boolean} True if service should be included.
+ */
+function matchesAnyFilter(serviceName: string, filters?: string[]): boolean {
+    if (!filters || filters.length === 0) {
+        return true;
+    }
+    return filters.some(filter => isMatch(serviceName, filter));
 }
 
 /**
@@ -79,17 +110,7 @@ async function safelyExtractSignature(
 /**
  * Processes a single Web Service: resolves its PHP class and extracts parameters and returns.
  *
- * @example
- * ```ts
- * const service: MoodleService = {
- *     name: 'core_user_get_users',
- *     classname: 'core_user_external',
- *     methodname: 'get_users'
- * };
- * const schema = await processSingleService(service, '/var/www/moodle');
- * ```
- *
- * @param {MoodleService} service - Web Service definition extracted from services.php.
+ * @param {MoodleService} service - Web Service definition.
  * @param {string} moodlePath - Root path of Moodle repository.
  * @returns {Promise<WebServiceSchema | null>} Structured schema or null if unresolvable.
  */
@@ -107,83 +128,60 @@ async function processSingleService(
 }
 
 /**
- * Processes a single db/services.php file: obtains AST, extracts functions, and processes each.
+ * Collects all declared services from a single db/services.php file.
  *
- * @example
- * ```ts
- * const schemas = await processServicesInFile('mod/assign/db/services.php', '/var/www/moodle');
- * console.log(`Extracted ${schemas.length} schemas from mod_assign`);
- * ```
- *
- * @param {string} serviceFilePath - Path to db/services.php.
+ * @param {string} filePath - Path to services.php file.
  * @param {string} moodlePath - Root path of Moodle repository.
- * @returns {Promise<WebServiceSchema[]>} List of valid extracted Web Service schemas.
+ * @returns {Promise<MoodleService[]>} List of declared services.
  */
-async function processServicesInFile(
-    serviceFilePath: string,
-    moodlePath: string
-): Promise<WebServiceSchema[]> {
-    const servicesAst = await getAst(serviceFilePath, moodlePath);
-    const services = extractServices(servicesAst);
-
-    const schemaTasks = services.map(service => processSingleService(service, moodlePath));
-    const schemas = await Promise.all(schemaTasks);
-
-    return schemas.filter((schema): schema is WebServiceSchema => schema !== null);
+async function collectServicesFromFile(filePath: string, moodlePath: string): Promise<MoodleService[]> {
+    const servicesAst = await getAst(filePath, moodlePath);
+    return extractServices(servicesAst);
 }
 
 /**
- * Iterates over all discovered db/services.php files and consolidates their service schemas.
+ * Collects all service definitions from discovered db/services.php files.
  *
- * @example
- * ```ts
- * const files = ['mod/assign/db/services.php', 'user/db/services.php'];
- * const allSchemas = await collectAllSchemas(files, '/var/www/moodle');
- * ```
- *
- * @param {string[]} serviceFiles - List of paths to db/services.php.
+ * @param {string[]} serviceFiles - Discovered services.php file paths.
  * @param {string} moodlePath - Root path of Moodle repository.
- * @returns {Promise<WebServiceSchema[]>} Consolidated collection of Web Service schemas.
+ * @returns {Promise<MoodleService[]>} Flat array of all services.
  */
-async function collectAllSchemas(
-    serviceFiles: string[],
-    moodlePath: string
-): Promise<WebServiceSchema[]> {
-    const fileTasks = serviceFiles.map(file => processServicesInFile(file, moodlePath));
-    const resultsByFile = await Promise.all(fileTasks);
-    return resultsByFile.flat();
+async function collectAllServices(serviceFiles: string[], moodlePath: string): Promise<MoodleService[]> {
+    const tasks = serviceFiles.map(file => collectServicesFromFile(file, moodlePath));
+    const results = await Promise.all(tasks);
+    return results.flat();
 }
 
 /**
- * Orchestrates the complete Web Service extraction pipeline for a given Moodle version.
+ * Extracts Web Service schemas from a local Moodle repository with optional service filtering.
  *
  * @example
  * ```ts
- * const result = await extractWebServices({
- *     version: '4.5.0',
+ * const schemas = await extractWebservice({
  *     moodlePath: '/var/www/moodle',
- *     outputPath: './schemas/v/4.5.json'
+ *     services: ['core_user_get_users', 'mod_forum_*']
  * });
- * console.log(`Successfully extracted ${result.totalServices} services`);
  * ```
  *
- * @param {ExtractorConfig} config - Version and input/output path configuration.
- * @returns {Promise<ExtractorResult>} Structured summary of the extraction result.
+ * @param {ExtractWebserviceOptions} options - Extraction options.
+ * @returns {Promise<WebServiceSchema[]>} Extracted Web Service schemas.
  */
-export async function extractWebServices(config: ExtractorConfig): Promise<ExtractorResult> {
-    if (!(await isVersionSupported(config.moodlePath))) {
-        throw new Error('Skip, version unsupported');
+export async function extractWebservice(
+    options: ExtractWebserviceOptions
+): Promise<WebServiceSchema[]> {
+    try {
+        const moodlePath = path.resolve(options.moodlePath);
+        const serviceFiles = await findFiles(moodlePath, ['*/db/services.php']);
+        const allServices = await collectAllServices(serviceFiles, moodlePath);
+        const filtered = allServices.filter(s => matchesAnyFilter(s.name, options.services));
+
+        const limit = pLimit(options.concurrency ?? 8);
+        const tasks = filtered.map(service => limit(() => processSingleService(service, moodlePath)));
+        const results = await Promise.all(tasks);
+
+        return results.filter((schema): schema is WebServiceSchema => schema !== null);
+    } finally {
+        clearAstCache();
+        await cleanupPhpRuntime();
     }
-    const normalizedVersion = normalizeVersion(config.version);
-    const targetOutputPath = config.outputPath ?? path.join('schemas/v', `${normalizedVersion}.json`);
-    const serviceFiles = await findFiles(config.moodlePath, ['*/db/services.php']);
-    const schemas = await collectAllSchemas(serviceFiles, config.moodlePath);
-
-    await saveJson(schemas, targetOutputPath);
-
-    return {
-        version: normalizedVersion,
-        totalServices: schemas.length,
-        outputPath: targetOutputPath
-    };
 }

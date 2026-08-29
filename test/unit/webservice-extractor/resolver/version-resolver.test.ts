@@ -100,6 +100,55 @@ describe('Unit Test: version-resolver (Single Responsibility: Version Detection)
             );
         });
 
+        it('should dynamically ignore plugin version.php files and resolve core version.php in nested directory', async () => {
+            const moodlePath = './nested/moodle';
+            const pluginVersionAst = {
+                kind: 'program',
+                children: [
+                    {
+                        kind: 'expressionstatement',
+                        expression: {
+                            kind: 'assign',
+                            left: { kind: 'propertylookup', what: { kind: 'variable', name: 'plugin' }, offset: { kind: 'identifier', name: 'version' } },
+                            right: { kind: 'number', value: '2025100600' }
+                        }
+                    }
+                ]
+            };
+            const coreVersionAst = {
+                kind: 'program',
+                children: [
+                    {
+                        kind: 'expressionstatement',
+                        expression: {
+                            kind: 'assign',
+                            left: { kind: 'variable', name: 'release' },
+                            right: { kind: 'string', value: '5.1.0 (Build: 20260901)' }
+                        }
+                    }
+                ]
+            };
+
+            (AstManager.getAst as jest.Mock).mockImplementation((file: string) => {
+                if (file === 'version.php') {
+                    return Promise.reject(new Error('Not at root'));
+                }
+                if (file.includes('admin/tool')) {
+                    return Promise.resolve(pluginVersionAst);
+                }
+                return Promise.resolve(coreVersionAst);
+            });
+
+            const Scanner = await import('../../../../src/webservice-extractor/scanner/scanner');
+            jest.spyOn(Scanner, 'findFiles').mockResolvedValue([
+                'nested/moodle/public/admin/tool/version.php',
+                'nested/moodle/public/version.php'
+            ]);
+
+            const version = await resolveVersion(moodlePath);
+            expect(version).toBe('5.1.0');
+        });
+
     });
 
 });

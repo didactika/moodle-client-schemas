@@ -1,6 +1,7 @@
 import path from 'path';
 import { execFile } from 'child_process';
 import { WebserviceSignature, SignatureExtractionPayload } from '../interfaces/signature.interfaces';
+import { getPhpBinary } from './php-runtime';
 
 const CLI_EXECUTOR_PATH = path.resolve(__dirname, '../../php-adapter/cli-executor.php');
 
@@ -54,6 +55,40 @@ export function parsePhpOutput(stdout: string): WebserviceSignature {
     }
 }
 
+interface JsonErrorPayload {
+    error?: string;
+    file?: string;
+    line?: number;
+}
+
+/**
+ * Appends source file and line location to error message if present.
+ *
+ * @param {string} msg - Base error message.
+ * @param {string} [file] - Source file path.
+ * @param {number} [line] - Source line number.
+ * @returns {string} Enriched error string.
+ */
+function appendErrorLocation(msg: string, file?: string, line?: number): string {
+    if (file && line) {
+        return `${msg} in ${file}:${line}`;
+    }
+    return msg;
+}
+
+/**
+ * Formats structured error payload with source file and line if available.
+ *
+ * @param {JsonErrorPayload} parsed - Parsed error object.
+ * @returns {string | null} Formatted message.
+ */
+function formatJsonError(parsed: JsonErrorPayload): string | null {
+    if (!parsed.error) {
+        return null;
+    }
+    return appendErrorLocation(parsed.error, parsed.file, parsed.line);
+}
+
 /**
  * Safely extracts error description from structured JSON stderr output.
  *
@@ -62,8 +97,8 @@ export function parsePhpOutput(stdout: string): WebserviceSignature {
  */
 function extractJsonErrorMessage(stderr: string): string | null {
     try {
-        const parsed = JSON.parse(stderr) as { error?: string };
-        return parsed.error ? parsed.error : null;
+        const parsed = JSON.parse(stderr) as JsonErrorPayload;
+        return formatJsonError(parsed);
     } catch {
         return null;
     }
@@ -81,17 +116,30 @@ function formatStderrError(stderr: string): string {
 }
 
 /**
+ * Extracts base error message from raw error object.
+ *
+ * @param {{ stderr?: string; message?: string }} err - Raw error object.
+ * @returns {string} Clean base error.
+ */
+function extractRawErrorMessage(err: { stderr?: string; message?: string }): string {
+    if (err.stderr) {
+        return formatStderrError(err.stderr);
+    }
+    return err.message ? err.message.trim() : 'Unknown error';
+}
+
+/**
  * Formats a clean error message from PHP adapter execution failure.
  *
  * @param {unknown} error - Raw execution error.
  * @returns {string} Formatted error message.
  */
 function formatPhpError(error: unknown): string {
-    const err = error as { stderr?: string; message?: string };
-    if (err.stderr) {
-        return formatStderrError(err.stderr);
+    const err = error as { code?: string | number; stderr?: string; message?: string };
+    if (err.code === 'ETIMEDOUT') {
+        return 'Execution timed out';
     }
-    return err.message ? err.message.trim() : 'Unknown error';
+    return extractRawErrorMessage(err);
 }
 
 /**
@@ -118,9 +166,10 @@ function handleProcessError(
  * @param {number} timeoutMs - Execution timeout.
  * @returns {Promise<string>} Output string from stdout.
  */
-function executePhpCli(args: string[], timeoutMs: number): Promise<string> {
+async function executePhpCli(args: string[], timeoutMs: number): Promise<string> {
+    const binary = await getPhpBinary();
     return new Promise((resolve, reject) => {
-        execFile('php', args, { timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
+        execFile(binary, args, { timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
             if (error) {
                 handleProcessError(error, stderr, reject);
                 return;

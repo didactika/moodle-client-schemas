@@ -449,6 +449,41 @@ describe('Unit Test: class-resolver', () => {
             expect(resolvedPath).toBeNull();
         });
 
+        it('should resolve core_external to lib/external/externallib.php when modern path exists', async () => {
+            (fs.existsSync as jest.Mock).mockImplementation((filePath: string) => {
+                return filePath.includes('lib/external/externallib.php');
+            });
+
+            const service: MoodleService = {
+                name: 'core_fetch_notifications',
+                classname: 'core_external',
+                type: 'read',
+                methodname: 'fetch_notifications',
+                description: 'Fetch notifications',
+            };
+
+            const resolvedPath = await resolveClass(service, './src/tmp/moodle/v/5.1');
+            expect(resolvedPath).toBe('lib/external/externallib.php');
+        });
+
+        it('should resolve explicit classpath when file exists', async () => {
+            (fs.existsSync as jest.Mock).mockImplementation((filePath: string) => {
+                return filePath.includes('enrol/externallib.php');
+            });
+
+            const service: MoodleService = {
+                name: 'core_role_assign_roles',
+                classname: 'core_role_external',
+                type: 'write',
+                methodname: 'assign_roles',
+                classpath: 'enrol/externallib.php',
+                description: 'Manual role assignments',
+            };
+
+            const resolvedPath = await resolveClass(service, './src/tmp/moodle/v/5.1');
+            expect(resolvedPath).toBe('enrol/externallib.php');
+        });
+
     });
 
 });

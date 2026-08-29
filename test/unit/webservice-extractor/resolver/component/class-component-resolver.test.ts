@@ -1,9 +1,8 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { resolveClassComponents } from '../../../../../src/webservice-extractor/resolver/component/class-component-resolver';
-import ContentCache from '../../../../../src/webservice-extractor/cache/content-cache';
 import AstParser from '../../../../../src/webservice-extractor/parser/ast-parser';
-import { configureAstManager } from '../../../../../src/webservice-extractor/cache/ast-manager';
+import { configureAstManager, clearAstCache } from '../../../../../src/webservice-extractor/cache/ast-manager';
 
 describe('Unit Test: class-component-resolver (Moodle 2.6 - 3.7)', () => {
 
@@ -11,10 +10,10 @@ describe('Unit Test: class-component-resolver (Moodle 2.6 - 3.7)', () => {
     const mockMoodlePath = path.resolve(__dirname, '../../../../tmp/mock_moodle_class_test');
 
     beforeEach(async () => {
+        clearAstCache();
         await fs.mkdir(path.join(mockMoodlePath, 'lib/classes'), { recursive: true });
-        const cache = new ContentCache({ cacheDir: path.join(mockMoodlePath, '.cache'), maxEpochAge: 3 });
         const parser = new AstParser();
-        configureAstManager(cache, parser);
+        configureAstManager(parser);
     });
 
     afterEach(async () => {
