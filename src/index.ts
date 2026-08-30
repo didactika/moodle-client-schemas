@@ -1,5 +1,6 @@
 export { extractWebservice, ExtractWebserviceOptions } from './webservice-extractor';
 export { sanitizeDescription } from './webservice-extractor/utils/description-utils';
+export { resolvePrimitiveType, PrimitiveType } from './webservice-extractor/utils/type-utils';
 export {
     WebServiceSchema,
     WebServiceExtractionError,

@@ -7,7 +7,9 @@ import {
 import {
     SignatureExtractionPayload,
     ValueSchemaNode,
-    ObjectSchemaNode
+    ObjectSchemaNode,
+    WebServiceArraySchema,
+    WebServiceValueSchema
 } from '../../../src/webservice-extractor/interfaces/signature.interfaces';
 
 jest.mock('child_process');
@@ -65,9 +67,14 @@ describe('Unit Test: PHP Signature Extractor Bridge (Phase 3)', () => {
             });
 
             const result = parsePhpOutput(sampleJson);
-            const userParam = result.parameters?.keys.userid as ValueSchemaNode;
+            const userParam = result.parameters?.keys.userid as WebServiceValueSchema;
             expect(userParam.type).toBe('int');
+            expect(userParam.primitiveType).toBe('number');
             expect(result.returns?.kind).toBe('array');
+            const returns = result.returns as WebServiceArraySchema;
+            const returnContent = returns.content as WebServiceValueSchema;
+            expect(returnContent.type).toBe('text');
+            expect(returnContent.primitiveType).toBe('string');
         });
 
         it('should throw an error when stdout contains malformed non-JSON data', () => {
