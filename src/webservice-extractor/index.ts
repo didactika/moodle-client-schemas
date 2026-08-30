@@ -15,6 +15,7 @@ import { getAst, clearAstCache } from './cache/ast-manager';
 import { extractServices } from './extractor/service-extractor';
 import { resolveClass } from './resolver/class-resolver';
 import { extractWebserviceSignature } from './adapter/php-signature-extractor';
+import { sanitizeDescription } from './utils/description-utils';
 import { cleanupPhpRuntime, validatePhpRuntime } from './adapter/php-runtime';
 
 export interface ExtractWebserviceOptions {
@@ -85,12 +86,16 @@ function assembleServiceSchema(
     service: MoodleService,
     signature: WebserviceSignature
 ): WebServiceSchema {
-    return {
+    const cleanDesc = sanitizeDescription(service.description);
+    const schema: WebServiceSchema = {
         name: service.name,
-        description: service.description ?? '',
         parameters: signature.parameters,
         returns: signature.returns
     };
+    if (cleanDesc) {
+        schema.description = cleanDesc;
+    }
+    return schema;
 }
 
 /**

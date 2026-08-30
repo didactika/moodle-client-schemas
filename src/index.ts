@@ -1,4 +1,5 @@
 export { extractWebservice, ExtractWebserviceOptions } from './webservice-extractor';
+export { sanitizeDescription } from './webservice-extractor/utils/description-utils';
 export {
     WebServiceSchema,
     WebServiceExtractionError,

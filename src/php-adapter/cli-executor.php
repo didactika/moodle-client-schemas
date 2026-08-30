@@ -38,6 +38,10 @@ register_shutdown_function(function () {
     }
 });
 
+set_exception_handler(function (\Throwable $e) {
+    emit_cli_error(3, "Uncaught Exception " . get_class($e) . ": " . $e->getMessage(), $e, $e->getFile(), $e->getLine());
+});
+
 /**
  * Parses options from CLI argument list.
  *
@@ -146,14 +150,21 @@ foreach ($safeCoreLibraries as $coreLibPath) {
     }
 }
 
+$cleanFile = ltrim($file, '/');
 $candidatePaths = [
-    $CFG->dirroot . '/' . ltrim($file, '/'),
-    $moodleRoot . '/' . ltrim($file, '/')
+    $CFG->dirroot . '/' . $cleanFile,
+    $moodleRoot . '/' . $cleanFile
 ];
 
+if (str_starts_with($cleanFile, 'public/')) {
+    $withoutPublic = substr($cleanFile, 7);
+    $candidatePaths[] = $CFG->dirroot . '/' . $withoutPublic;
+    $candidatePaths[] = $moodleRoot . '/' . $withoutPublic;
+}
+
 $dirrootName = basename($CFG->dirroot);
-if (strpos(ltrim($file, '/'), $dirrootName . '/') === 0) {
-    $stripped = substr(ltrim($file, '/'), strlen($dirrootName) + 1);
+if (strpos($cleanFile, $dirrootName . '/') === 0) {
+    $stripped = substr($cleanFile, strlen($dirrootName) + 1);
     $candidatePaths[] = $CFG->dirroot . '/' . $stripped;
 }
 
@@ -166,7 +177,7 @@ foreach ($candidatePaths as $candidate) {
 }
 
 if ($fullPath === null) {
-    emit_cli_error(2, "Class file not found on disk: {$CFG->dirroot}/" . ltrim($file, '/'));
+    emit_cli_error(2, "Class file not found on disk: {$CFG->dirroot}/" . $cleanFile);
 }
 
 // 9. Load class file with output suppression
@@ -182,13 +193,31 @@ try {
 try {
     $cleanClass = '\\' . ltrim($class, '\\');
 
+    $parameters = null;
     $paramMethod = resolve_signature_method($cleanClass, $method, 'parameters');
-    $parameters = $paramMethod !== null ? $cleanClass::$paramMethod() : null;
+    if ($paramMethod !== null) {
+        try {
+            $parameters = $cleanClass::$paramMethod();
+        } catch (\Throwable $paramErr) {
+            // Silently fallback if specific method threw internal error
+            $parameters = null;
+        }
+    }
 
+    $returns = null;
     $returnMethod = resolve_signature_method($cleanClass, $method, 'returns');
-    $returns = $returnMethod !== null ? $cleanClass::$returnMethod() : null;
+    if ($returnMethod !== null) {
+        try {
+            $returns = $cleanClass::$returnMethod();
+        } catch (\Throwable $returnErr) {
+            // Silently fallback if specific method threw internal error
+            $returns = null;
+        }
+    }
 
-    ob_end_clean();
+    if (ob_get_level() > 0) {
+        ob_end_clean();
+    }
 
     $outputJson = json_encode([
         'parameters' => $parameters,

@@ -161,7 +161,15 @@ class HeadlessBootstrap {
             'DEBUG_MINIMAL'          => 5,
             'DEBUG_NORMAL'           => 15,
             'DEBUG_ALL'              => 6143,
-            'DEBUG_DEVELOPER'        => 32767
+            'DEBUG_DEVELOPER'        => 32767,
+            'BEHAT_TEST'             => false,
+            'BEHAT_PARALLEL'         => false,
+            'CONTEXT_SYSTEM'         => 10,
+            'CONTEXT_USER'           => 30,
+            'CONTEXT_COURSECAT'      => 40,
+            'CONTEXT_COURSE'         => 50,
+            'CONTEXT_MODULE'         => 70,
+            'CONTEXT_BLOCK'          => 80
         ];
 
         foreach ($constants as $name => $value) {
@@ -178,6 +186,8 @@ class HeadlessBootstrap {
                     define("core\DEBUG_NORMAL", 15);
                     define("core\DEBUG_ALL", 6143);
                     define("core\DEBUG_DEVELOPER", 32767);
+                    define("core\BEHAT_TEST", false);
+                    define("core\BEHAT_PARALLEL", false);
                 }
             }');
         }
@@ -215,6 +225,9 @@ class HeadlessBootstrap {
     public static function resolveMoodleDirroot(string $moodleRoot): string {
         if (file_exists($moodleRoot . '/version.php')) {
             return $moodleRoot;
+        }
+        if (file_exists($moodleRoot . '/public/version.php')) {
+            return $moodleRoot . '/public';
         }
         $matched = glob($moodleRoot . '/*/version.php');
         if (!empty($matched)) {
