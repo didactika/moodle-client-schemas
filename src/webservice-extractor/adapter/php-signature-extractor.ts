@@ -10,7 +10,8 @@ import {
 } from '../interfaces/signature.interfaces';
 import { getPhpBinary } from './php-runtime';
 import { sanitizeDescription } from '../utils/description-utils';
-export { sanitizeDescription };
+import { resolvePrimitiveType } from '../utils/type-utils';
+export { sanitizeDescription, resolvePrimitiveType };
 
 /**
  * Evaluates candidate file paths and returns the first existing path.
@@ -179,7 +180,8 @@ function normalizeValueNode(raw: Record<string, unknown>, desc?: string): WebSer
     const node: Record<string, unknown> = {
         ...rest,
         kind: 'value',
-        type: rawType
+        type: rawType,
+        primitiveType: resolvePrimitiveType(rawType)
     };
 
     if (desc) {

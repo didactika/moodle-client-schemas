@@ -1,3 +1,6 @@
+import { PrimitiveType } from '../utils/type-utils';
+export { PrimitiveType };
+
 /**
  * Structural schema node kind classification.
  */
@@ -24,6 +27,8 @@ export interface WebServiceValueSchema extends WebServiceBaseSchema {
     kind?: 'value';
     /** Moodle parameter type constant name (e.g. 'PARAM_INT', 'PARAM_TEXT', 'PARAM_BOOL', 'PARAM_ALPHANUM') */
     type: string;
+    /** Standard primitive scalar data type ('string' | 'number' | 'boolean') */
+    primitiveType?: PrimitiveType;
 }
 
 /**

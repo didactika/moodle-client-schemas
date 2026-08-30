@@ -284,16 +284,17 @@ export type WebServiceReturnSchema =
 
 Every schema node contains descriptive metadata derived directly from Moodle's internal `external_description` reflection API:
 
-| Field | Type | Description |
-|---|---|---|
-| `kind` | `'parameters' \| 'object' \| 'array' \| 'value'` | Structural classification of the node in the schema tree. |
-| `description` | `string` | **Human-readable parameter description** written by the Moodle core/plugin author (maps to `$this->desc` in PHP). |
-| `type` | `string` | Moodle sanitation constant (e.g., `PARAM_INT`, `PARAM_TEXT`, `PARAM_RAW`, `PARAM_BOOL`, `PARAM_EMAIL`, `PARAM_USERNAME`, `PARAM_ALPHANUM`). |
-| `required` | `number` | Requirement rule defined by Moodle constants:<br>• `1` (`VALUE_REQUIRED`): Mandatory parameter.<br>• `2` (`VALUE_OPTIONAL`): Optional parameter.<br>• `0` (`VALUE_DEFAULT`): Parameter has a fallback default value. |
-| `default` | `unknown` | Fallback value used by Moodle when an optional parameter is omitted by the caller. |
-| `allownull` | `boolean` | Indicates whether `null` is explicitly permitted (`NULL_ALLOWED = true`, `NULL_NOT_ALLOWED = false`). |
-| `keys` | `Record<string, WebServiceReturnSchema>` | Dictionary mapping property names to their child schemas for `object` and `parameters` nodes. |
-| `content` | `WebServiceReturnSchema` | Definition of the element schema for homogeneous `array` nodes. |
+| Field           | Type                                           | Description                                                                                                                                                                                                          |
+|-----------------|------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `kind`          | `'parameters' \| 'object' \| 'array' \| 'value'` | Structural classification of the node in the schema tree.                                                                                                                                                            |
+| `description`   | `string`                                       | **Human-readable parameter description** written by the Moodle core/plugin author (maps to `$this->desc` in PHP).                                                                                                    |
+| `type`          | `string`                                       | Moodle sanitation constant (e.g., `PARAM_INT`, `PARAM_TEXT`, `PARAM_RAW`, `PARAM_BOOL`, `PARAM_EMAIL`, `PARAM_USERNAME`, `PARAM_ALPHANUM`).                                                                          |
+| `primitiveType` | `'string' \| 'number' \| 'boolean'`   | Primitive type.                                                                                               |
+| `required`      | `number`                                       | Requirement rule defined by Moodle constants:<br>• `1` (`VALUE_REQUIRED`): Mandatory parameter.<br>• `2` (`VALUE_OPTIONAL`): Optional parameter.<br>• `0` (`VALUE_DEFAULT`): Parameter has a fallback default value. |
+| `default`       | `unknown`                                      | Fallback value used by Moodle when an optional parameter is omitted by the caller.                                                                                                                                   |
+| `allownull`     | `boolean`                                      | Indicates whether `null` is explicitly permitted (`NULL_ALLOWED = true`, `NULL_NOT_ALLOWED = false`).                                                                                                                |
+| `keys`          | `Record<string, WebServiceReturnSchema>`       | Dictionary mapping property names to their child schemas for `object` and `parameters` nodes.                                                                                                                        |
+| `content`       | `WebServiceReturnSchema`                       | Definition of the element schema for homogeneous `array` nodes.                                                                                                                                                      |
 
 #### Concrete Schema Example
 
