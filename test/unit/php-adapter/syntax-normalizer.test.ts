@@ -73,4 +73,87 @@ describe('SyntaxNormalizer Unit Tests', () => {
     await execFileAsync('php', ['-r', phpCode]);
     expect(fs.existsSync(markerPath)).toBe(true);
   });
+
+  it('should normalize get_level_name and get_context_name method signatures for PHP 8 compatibility', async () => {
+    const filePath = path.join(tempDir, 'accesslib.php');
+    const content = `<?php
+abstract class context {
+    public static function get_level_name() { return 'base'; }
+    public function get_context_name() { return 'base'; }
+}
+class context_helper extends context {
+    public static function get_level_name($contextlevel) { return 'level ' . $contextlevel; }
+}
+`;
+    fs.writeFileSync(filePath, content, 'utf8');
+
+    const phpCode = `
+      require_once '${NORMALIZER_SCRIPT}';
+      \\Didactika\\MoodleClientSchemas\\Bootstrap\\SyntaxNormalizer::normalize('${tempDir}');
+    `;
+
+    await execFileAsync('php', ['-r', phpCode]);
+
+    const updatedContent = fs.readFileSync(filePath, 'utf8');
+    expect(updatedContent).toContain('function get_level_name($contextlevel = null)');
+    expect(updatedContent).toContain('function get_context_name($withprefix = true, $short = false)');
+
+    // Verify it compiles and executes without Fatal PHP Error in PHP 8
+    const testExecution = `
+      require_once '${filePath}';
+      echo context_helper::get_level_name(50);
+    `;
+    const { stdout } = await execFileAsync('php', ['-r', testExecution]);
+    expect(stdout).toContain('level 50');
+  });
+
+  it('should never corrupt modern PHP string interpolation like "prefix_{$name}" or "gradingform_{$method}"', async () => {
+    const filePath = path.join(tempDir, 'lib.php');
+    const content = `<?php
+$method = 'guide';
+$name = 'test';
+$prefix_ = 'moodle_';
+$str1 = "gradingform_{$method}";
+$str2 = "$prefix_{$name}";
+$email = "test@example.com";
+$first = $email{0};
+`;
+    fs.writeFileSync(filePath, content, 'utf8');
+
+    const phpCode = `
+      require_once '${NORMALIZER_SCRIPT}';
+      \\Didactika\\MoodleClientSchemas\\Bootstrap\\SyntaxNormalizer::normalize('${tempDir}');
+    `;
+
+    await execFileAsync('php', ['-r', phpCode]);
+
+    const updatedContent = fs.readFileSync(filePath, 'utf8');
+    expect(updatedContent).toContain('"gradingform_{$method}"');
+    expect(updatedContent).toContain('"$prefix_{$name}"');
+    expect(updatedContent).toContain('$email[0]');
+
+    // Verify it passes PHP syntax lint without parse error
+    const { stdout } = await execFileAsync('php', ['-l', filePath]);
+    expect(stdout).toContain('No syntax errors detected');
+  });
+
+  it('should skip normalization entirely on modern Moodle 4.x/5.x codebases', async () => {
+    const versionFile = path.join(tempDir, 'version.php');
+    fs.writeFileSync(versionFile, "<?php\n$version = 2024042200;\n$release = '4.4';\n", 'utf8');
+
+    const sampleFile = path.join(tempDir, 'sample.php');
+    const content = "<?php\nclass object extends stdClass {}\n";
+    fs.writeFileSync(sampleFile, content, 'utf8');
+
+    const phpCode = `
+      require_once '${NORMALIZER_SCRIPT}';
+      \\Didactika\\MoodleClientSchemas\\Bootstrap\\SyntaxNormalizer::normalize('${tempDir}');
+    `;
+
+    await execFileAsync('php', ['-r', phpCode]);
+
+    // On modern Moodle, files are not modified
+    const updatedContent = fs.readFileSync(sampleFile, 'utf8');
+    expect(updatedContent).toBe(content);
+  });
 });

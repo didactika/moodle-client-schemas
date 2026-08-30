@@ -7,6 +7,7 @@ import {
     extractFieldValue,
     extractStringLiteral
 } from '../parser/ast-utils';
+import { sanitizeDescription } from '../utils/description-utils';
 
 /**
  * Assigns optional classpath property to the service if present in the definition map.
@@ -40,7 +41,12 @@ function assignClasspath(service: MoodleService, fields: Map<string, Node>): voi
  */
 function assignDescription(service: MoodleService, fields: Map<string, Node>): void {
     if (fields.has('description')) {
-        service.description = extractFieldValue(fields.get('description'));
+        const raw = extractFieldValue(fields.get('description'));
+        if (raw === null) {
+            service.description = null;
+        } else {
+            service.description = sanitizeDescription(raw) ?? null;
+        }
     }
 }
 

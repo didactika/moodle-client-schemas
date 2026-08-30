@@ -10,7 +10,7 @@ export interface WebServiceBaseSchema {
     kind?: WebServiceSchemaKind;
     /** Human-readable parameter or field description written by Moodle developers */
     description?: string;
-    /** Backwards-compatible alias for description */
+    /** @deprecated Use description instead. Output JSON only contains description. */
     desc?: string;
     required?: number;
     default?: unknown;

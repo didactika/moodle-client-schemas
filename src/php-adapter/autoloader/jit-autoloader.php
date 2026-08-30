@@ -78,6 +78,81 @@ class JitAutoloader {
             return true;
         }
 
+        if ($shortName === 'external_api') {
+            $code = ($namespace !== '' ? "namespace $namespace;\n" : '') . 'abstract class external_api {
+                public static function validate_parameters($schema, $params) { return $params; }
+                public static function validate_context($context) {}
+                public static function clean_returnvalue($schema, $data) { return $data; }
+            }';
+            @eval($code);
+            return true;
+        }
+
+        if ($shortName === 'moodleform') {
+            $code = ($namespace !== '' ? "namespace $namespace;\n" : '') . 'abstract class moodleform {
+                public $_form;
+                public function __construct($action = null, $customdata = null, $method = "post", $target = "", $attributes = null, $editable = true, $ajaxformdata = null) {
+                    $this->_form = new class {
+                        public function addElement($type, $name = "", $label = "", $attributes = null) { return new \stdClass(); }
+                        public function addRule($element, $message, $type, $format = "server", $validation = "client", $reset = false, $force = false) {}
+                        public function addGroup($elements, $name = "", $label = "", $separator = null, $appendName = true) { return new \stdClass(); }
+                        public function setType($element, $type) {}
+                        public function setDefault($element, $default) {}
+                        public function addHelpButton($element, $identifier, $component = "moodle", $linktext = "", $suppresscheck = false) {}
+                        public function hideIf($element, $dependentOn, $condition = "notchecked", $value = "1") {}
+                        public function disabledIf($element, $dependentOn, $condition = "notchecked", $value = "1") {}
+                        public function closeHeaderBefore($element) {}
+                        public function setExpanded($header, $expanded = true) {}
+                        public function __call($name, $args) { return null; }
+                    };
+                    try {
+                        $this->definition();
+                    } catch (\Throwable $e) {}
+                }
+                protected abstract function definition();
+                public function definition_after_data() {}
+                public function validation($data, $files) { return []; }
+                public function get_data() { return null; }
+                public function is_cancelled() { return false; }
+            }';
+            @eval($code);
+            return true;
+        }
+
+        if ($shortName === 'core_plugin_manager') {
+            $code = ($namespace !== '' ? "namespace $namespace;\n" : '') . 'class core_plugin_manager {
+                private static $instance = null;
+                public static function instance() {
+                    if (self::$instance === null) {
+                        self::$instance = new self();
+                    }
+                    return self::$instance;
+                }
+                public static function reset_caches() {}
+                public function get_plugin_types() { return []; }
+                public function get_installed_plugins($type = null) { return []; }
+                public function get_plugins_of_type($type) { return []; }
+                public function get_plugins() { return []; }
+                public function get_subplugins($component) { return []; }
+                public function get_plugin_info($component) { return null; }
+                public function is_plugin_enabled($component) { return true; }
+                public function __call($name, $args) { return []; }
+            }';
+            @eval($code);
+            return true;
+        }
+
+        if (str_starts_with($shortName, 'behat_') || $shortName === 'behat_data_generators' || $shortName === 'behat_util' || $shortName === 'behat_base') {
+            $code = ($namespace !== '' ? "namespace $namespace;\n" : '') . "class $shortName {
+                public function __construct(...\$args) {}
+                public static function get_entity_generators() { return []; }
+                public function __call(\$name, \$args) { return []; }
+                public static function __callStatic(\$name, \$args) { return []; }
+            }";
+            @eval($code);
+            return true;
+        }
+
         if ($shortName === 'exporter') {
             $code = ($namespace !== '' ? "namespace $namespace;\n" : '') . 'abstract class exporter {
                 public static function get_read_structure() {
@@ -209,6 +284,19 @@ class JitAutoloader {
         }
         if (!function_exists('core\get_list_of_themes')) {
             eval('namespace core { function get_list_of_themes() { return []; } }');
+        }
+        if (!class_exists('core\di', false)) {
+            eval('namespace core {
+                class di {
+                    public static function get($name) {
+                        if (class_exists($name)) {
+                            return new $name();
+                        }
+                        return null;
+                    }
+                    public static function set($name, $value) {}
+                }
+            }');
         }
     }
 }

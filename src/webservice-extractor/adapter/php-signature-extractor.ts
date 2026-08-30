@@ -9,6 +9,8 @@ import {
     WebServiceParametersSchema
 } from '../interfaces/signature.interfaces';
 import { getPhpBinary } from './php-runtime';
+import { sanitizeDescription } from '../utils/description-utils';
+export { sanitizeDescription };
 
 /**
  * Evaluates candidate file paths and returns the first existing path.
@@ -89,58 +91,68 @@ function normalizeKeys(rawKeys: Record<string, unknown>): Record<string, WebServ
 }
 
 /**
- * Normalizes description on an object node.
+ * Normalizes an object node, removing raw desc and setting cleaned description.
  *
  * @param {Record<string, unknown>} raw - Raw object node.
- * @param {string | undefined} desc - Description text.
+ * @param {string | undefined} desc - Sanitized description text.
  * @returns {WebServiceReturnSchema} Normalized object schema.
  */
 function normalizeObjectNode(
     raw: Record<string, unknown>,
     desc?: string
 ): WebServiceReturnSchema {
-    const keys = normalizeKeys((raw.keys as Record<string, unknown>) ?? {});
-    return {
-        ...raw,
+    const { desc: _rawDesc, description: _rawDescription, keys: rawKeys, ...rest } = raw;
+    const keys = normalizeKeys((rawKeys as Record<string, unknown>) ?? {});
+
+    const node: Record<string, unknown> = {
+        ...rest,
         kind: raw.kind === 'parameters' ? 'parameters' : 'object',
-        description: desc,
-        desc,
         keys
-    } as WebServiceReturnSchema;
+    };
+
+    if (desc) {
+        node.description = desc;
+    }
+
+    return node as unknown as WebServiceReturnSchema;
 }
 
 /**
- * Normalizes description on an array node.
+ * Normalizes an array node, removing raw desc and setting cleaned description.
  *
  * @param {Record<string, unknown>} raw - Raw array node.
- * @param {string | undefined} desc - Description text.
+ * @param {string | undefined} desc - Sanitized description text.
  * @returns {WebServiceReturnSchema} Normalized array schema.
  */
 function normalizeArrayNode(
     raw: Record<string, unknown>,
     desc?: string
 ): WebServiceReturnSchema {
-    const content = normalizeSchemaNode(raw.content);
-    return {
-        ...raw,
+    const { desc: _rawDesc, description: _rawDescription, content: rawContent, ...rest } = raw;
+    const content = normalizeSchemaNode(rawContent);
+
+    const node: Record<string, unknown> = {
+        ...rest,
         kind: 'array',
-        description: desc,
-        desc,
         content: content ?? ({} as WebServiceReturnSchema)
-    } as WebServiceReturnSchema;
+    };
+
+    if (desc) {
+        node.description = desc;
+    }
+
+    return node as unknown as WebServiceReturnSchema;
 }
 
 /**
- * Extracts description or desc string from a raw node.
+ * Extracts and sanitizes description from a raw node (checking description and desc).
  *
  * @param {Record<string, unknown>} raw - Raw node.
- * @returns {string | undefined} Extracted description.
+ * @returns {string | undefined} Extracted and cleaned description.
  */
 function extractNodeDescription(raw: Record<string, unknown>): string | undefined {
-    if (typeof raw.description === 'string') {
-        return raw.description;
-    }
-    return typeof raw.desc === 'string' ? raw.desc : undefined;
+    const rawDesc = typeof raw.description === 'string' ? raw.description : raw.desc;
+    return sanitizeDescription(rawDesc);
 }
 
 /**
@@ -154,21 +166,27 @@ function isObjectNode(raw: Record<string, unknown>): boolean {
 }
 
 /**
- * Normalizes a primitive leaf value node.
+ * Normalizes a primitive leaf value node, removing raw desc and setting cleaned description.
  *
  * @param {Record<string, unknown>} raw - Raw value node.
- * @param {string | undefined} desc - Description string.
+ * @param {string | undefined} desc - Sanitized description string.
  * @returns {WebServiceReturnSchema} Normalized value schema.
  */
 function normalizeValueNode(raw: Record<string, unknown>, desc?: string): WebServiceReturnSchema {
+    const { desc: _rawDesc, description: _rawDescription, ...rest } = raw;
     const rawType = typeof raw.type === 'string' ? raw.type : '';
-    return {
-        ...raw,
+
+    const node: Record<string, unknown> = {
+        ...rest,
         kind: 'value',
-        description: desc,
-        desc,
         type: rawType
-    } as WebServiceReturnSchema;
+    };
+
+    if (desc) {
+        node.description = desc;
+    }
+
+    return node as unknown as WebServiceReturnSchema;
 }
 
 /**
@@ -281,10 +299,24 @@ function formatJsonError(parsed: JsonErrorPayload): string | null {
  * @returns {string | null} Extracted error message or null.
  */
 function extractJsonErrorMessage(stderr: string): string | null {
+    if (!stderr) {
+        return null;
+    }
     try {
-        const parsed = JSON.parse(stderr) as JsonErrorPayload;
+        const parsed = JSON.parse(stderr.trim()) as JsonErrorPayload;
         return formatJsonError(parsed);
     } catch {
+        const firstBrace = stderr.indexOf('{');
+        const lastBrace = stderr.lastIndexOf('}');
+        if (firstBrace !== -1 && lastBrace > firstBrace) {
+            try {
+                const candidate = stderr.slice(firstBrace, lastBrace + 1);
+                const parsed = JSON.parse(candidate) as JsonErrorPayload;
+                return formatJsonError(parsed);
+            } catch {
+                return null;
+            }
+        }
         return null;
     }
 }
