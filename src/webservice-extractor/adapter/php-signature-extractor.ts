@@ -92,6 +92,16 @@ function normalizeKeys(rawKeys: Record<string, unknown>): Record<string, WebServ
 }
 
 /**
+ * Resolves node kind property as parameters or object.
+ *
+ * @param {unknown} kind - Raw kind value.
+ * @returns {'parameters' | 'object'} Normalized kind.
+ */
+function resolveObjectKind(kind: unknown): 'parameters' | 'object' {
+    return kind === 'parameters' ? 'parameters' : 'object';
+}
+
+/**
  * Normalizes an object node, removing raw desc and setting cleaned description.
  *
  * @param {Record<string, unknown>} raw - Raw object node.
@@ -107,7 +117,7 @@ function normalizeObjectNode(
 
     const node: Record<string, unknown> = {
         ...rest,
-        kind: raw.kind === 'parameters' ? 'parameters' : 'object',
+        kind: resolveObjectKind(raw.kind),
         keys
     };
 
@@ -238,7 +248,7 @@ export function normalizeSchemaNode(node: unknown): WebServiceReturnSchema | nul
  * @param {WebserviceSignature} raw - Parsed raw signature.
  * @returns {WebserviceSignature} Normalized signature with description properties.
  */
-function normalizeWebserviceSignature(raw: WebserviceSignature): WebserviceSignature {
+export function normalizeWebserviceSignature(raw: WebserviceSignature): WebserviceSignature {
     return {
         parameters: raw.parameters ? (normalizeSchemaNode(raw.parameters) as WebServiceParametersSchema) : null,
         returns: raw.returns ? normalizeSchemaNode(raw.returns) : null
@@ -295,6 +305,37 @@ function formatJsonError(parsed: JsonErrorPayload): string | null {
 }
 
 /**
+ * Parses JSON error payload candidate and returns formatted message or null.
+ *
+ * @param {string} candidate - Potential JSON string.
+ * @returns {string | null} Formatted message or null.
+ */
+function parseJsonCandidate(candidate: string): string | null {
+    try {
+        const parsed = JSON.parse(candidate) as JsonErrorPayload;
+        return formatJsonError(parsed);
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Extracts and parses embedded JSON string from stderr text.
+ *
+ * @param {string} stderr - Raw stderr string.
+ * @returns {string | null} Parsed error message or null.
+ */
+function extractEmbeddedJson(stderr: string): string | null {
+    const firstBrace = stderr.indexOf('{');
+    const lastBrace = stderr.lastIndexOf('}');
+    if (firstBrace === -1 || lastBrace <= firstBrace) {
+        return null;
+    }
+    const candidate = stderr.slice(firstBrace, lastBrace + 1);
+    return parseJsonCandidate(candidate);
+}
+
+/**
  * Safely extracts error description from structured JSON stderr output.
  *
  * @param {string} stderr - Raw stderr string.
@@ -304,23 +345,11 @@ function extractJsonErrorMessage(stderr: string): string | null {
     if (!stderr) {
         return null;
     }
-    try {
-        const parsed = JSON.parse(stderr.trim()) as JsonErrorPayload;
-        return formatJsonError(parsed);
-    } catch {
-        const firstBrace = stderr.indexOf('{');
-        const lastBrace = stderr.lastIndexOf('}');
-        if (firstBrace !== -1 && lastBrace > firstBrace) {
-            try {
-                const candidate = stderr.slice(firstBrace, lastBrace + 1);
-                const parsed = JSON.parse(candidate) as JsonErrorPayload;
-                return formatJsonError(parsed);
-            } catch {
-                return null;
-            }
-        }
-        return null;
+    const directParsed = parseJsonCandidate(stderr.trim());
+    if (directParsed) {
+        return directParsed;
     }
+    return extractEmbeddedJson(stderr);
 }
 
 /**

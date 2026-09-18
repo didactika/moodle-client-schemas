@@ -53,3 +53,27 @@ export interface ExtractWebserviceResult {
     /** List of errors encountered during environment validation or individual service extraction */
     errors: WebServiceExtractionError[];
 }
+
+/**
+ * Options for extracting web services.
+ */
+export interface ExtractWebserviceOptions {
+    /** Root directory path of the target Moodle codebase */
+    moodlePath: string;
+    /**
+     * Filter list of webservices to extract.
+     * Pass ['*'] or omit to extract all available webservices.
+     * Supports exact service names or wildcard patterns (e.g. 'core_user_*').
+     */
+    services?: string[];
+    /** Concurrency limit for parallel signature extraction (default: 8) */
+    concurrency?: number;
+}
+
+/**
+ * Extraction result for a single service.
+ */
+export interface SingleServiceExtractionResult {
+    schema?: WebServiceSchema;
+    error?: WebServiceExtractionError;
+}

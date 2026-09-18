@@ -3,6 +3,7 @@ import fs from 'fs/promises';
 import { WebServiceExtractionError } from '../interfaces/schema-extractor.interfaces';
 
 let customPhpBinary: string | null = null;
+let cachedSystemPhpBinary: string | null = null;
 let temporaryRuntimeDir: string | null = null;
 
 export interface PhpValidationResult {
@@ -154,6 +155,17 @@ async function resolveValidatedBinary(): Promise<string> {
 }
 
 /**
+ * Resolves validated binary and caches it in memory.
+ *
+ * @returns {Promise<string>} Validated PHP binary path.
+ */
+async function resolveAndCacheBinary(): Promise<string> {
+    const binary = await resolveValidatedBinary();
+    cachedSystemPhpBinary = binary;
+    return binary;
+}
+
+/**
  * Resolves the active PHP binary to use.
  *
  * @returns {Promise<string>} PHP executable path or name.
@@ -162,7 +174,10 @@ export async function getPhpBinary(): Promise<string> {
     if (customPhpBinary) {
         return customPhpBinary;
     }
-    return resolveValidatedBinary();
+    if (cachedSystemPhpBinary) {
+        return cachedSystemPhpBinary;
+    }
+    return resolveAndCacheBinary();
 }
 
 /**
@@ -171,6 +186,7 @@ export async function getPhpBinary(): Promise<string> {
  * @returns {Promise<void>}
  */
 export async function cleanupPhpRuntime(): Promise<void> {
+    cachedSystemPhpBinary = null;
     if (temporaryRuntimeDir) {
         try {
             await fs.rm(temporaryRuntimeDir, { recursive: true, force: true });
