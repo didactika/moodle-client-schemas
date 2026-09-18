@@ -28,6 +28,19 @@ function assignClasspath(service: MoodleService, fields: Map<string, Node>): voi
 }
 
 /**
+ * Resolves cleaned description string or null from raw field value.
+ *
+ * @param {string | null} raw - Raw description string.
+ * @returns {string | null} Sanitized description or null.
+ */
+function resolveServiceDescription(raw: string | null): string | null {
+    if (raw === null) {
+        return null;
+    }
+    return sanitizeDescription(raw) ?? null;
+}
+
+/**
  * Assigns optional description property to the service if present in the definition map.
  *
  * @example
@@ -42,11 +55,7 @@ function assignClasspath(service: MoodleService, fields: Map<string, Node>): voi
 function assignDescription(service: MoodleService, fields: Map<string, Node>): void {
     if (fields.has('description')) {
         const raw = extractFieldValue(fields.get('description'));
-        if (raw === null) {
-            service.description = null;
-        } else {
-            service.description = sanitizeDescription(raw) ?? null;
-        }
+        service.description = resolveServiceDescription(raw);
     }
 }
 

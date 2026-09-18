@@ -1,40 +1,29 @@
 import fs from 'fs/promises';
 import path from 'path';
-import pLimit from 'p-limit';
 import { MoodleService } from './interfaces/service-extractor.interfaces';
 import {
     WebServiceSchema,
     WebServiceExtractionError,
     ExtractWebserviceResult,
-    WebServiceErrorCode
+    WebServiceErrorCode,
+    ExtractWebserviceOptions
 } from './interfaces/schema-extractor.interfaces';
 import { WebserviceSignature } from './interfaces/signature.interfaces';
+import {
+    ResolvedServiceEntry,
+    BatchServiceItem,
+    BatchExecutionResult
+} from './interfaces/batch.interfaces';
 
 import { findFiles } from './scanner/scanner';
 import { getAst, clearAstCache } from './cache/ast-manager';
 import { extractServices } from './extractor/service-extractor';
 import { resolveClass } from './resolver/class-resolver';
-import { extractWebserviceSignature } from './adapter/php-signature-extractor';
 import { sanitizeDescription } from './utils/description-utils';
 import { cleanupPhpRuntime, validatePhpRuntime } from './adapter/php-runtime';
+import { extractBatchSignatures } from './adapter/batch-signature-extractor';
 
-export interface ExtractWebserviceOptions {
-    /** Root directory path of the target Moodle codebase */
-    moodlePath: string;
-    /**
-     * Filter list of webservices to extract.
-     * Pass ['*'] or omit to extract all available webservices.
-     * Supports exact service names or wildcard patterns (e.g. 'core_user_*').
-     */
-    services?: string[];
-    /** Concurrency limit for parallel signature extraction (default: 8) */
-    concurrency?: number;
-}
-
-interface SingleServiceExtractionResult {
-    schema?: WebServiceSchema;
-    error?: WebServiceExtractionError;
-}
+export { ExtractWebserviceOptions };
 
 /**
  * Checks if a service name matches a wildcard prefix filter.
@@ -343,81 +332,88 @@ function classifyExecutionError(err: unknown): WebServiceErrorCode {
 }
 
 /**
- * Formats a caught execution error into a structured SingleServiceExtractionResult.
+ * Resolves class path for a single Moodle service.
  *
- * @param {MoodleService} service - Service metadata.
- * @param {string} classFilePath - Resolved class file path.
- * @param {unknown} err - Caught error.
- * @returns {SingleServiceExtractionResult} Error payload.
+ * @param {MoodleService} service - Service instance.
+ * @param {string} moodlePath - Moodle codebase root.
+ * @returns {Promise<ResolvedServiceEntry>} Resolved service entry.
  */
-function formatSignatureError(
+async function resolveServiceEntry(
     service: MoodleService,
-    classFilePath: string,
-    err: unknown
-): SingleServiceExtractionResult {
-    const message = err instanceof Error ? err.message : String(err);
+    moodlePath: string
+): Promise<ResolvedServiceEntry> {
+    const classFilePath = await resolveClass(service, moodlePath);
+    return { service, classFilePath };
+}
+
+/**
+ * Maps a resolved service entry to a batch item.
+ *
+ * @param {ResolvedServiceEntry} entry - Resolved service entry.
+ * @returns {BatchServiceItem} Batch service item.
+ */
+function toBatchItem(entry: ResolvedServiceEntry): BatchServiceItem {
     return {
-        error: {
-            serviceName: service.name,
-            classname: service.classname,
-            classFile: classFilePath,
-            code: classifyExecutionError(err),
-            message,
-            cause: message
-        }
+        serviceName: entry.service.name,
+        classFile: entry.classFilePath ?? '',
+        classname: entry.service.classname,
+        methodname: entry.service.methodname ?? 'execute'
     };
 }
 
 /**
- * Extracts signature safely, returning structured schema or capturing execution error.
+ * Handles a missing class file entry by appending a CLASS_NOT_FOUND error.
  *
- * @param {MoodleService} service - Service definition.
- * @param {string} classFilePath - Resolved relative class path.
- * @param {string} moodlePath - Root path of Moodle repository.
- * @returns {Promise<SingleServiceExtractionResult>} Schema or error.
+ * @param {MoodleService} service - Target service.
+ * @param {WebServiceExtractionError[]} serviceErrors - Errors accumulator.
  */
-async function safelyExtractSignature(
+function handleMissingClassEntry(
     service: MoodleService,
-    classFilePath: string,
-    moodlePath: string
-): Promise<SingleServiceExtractionResult> {
-    try {
-        const methodname = service.methodname ?? 'execute';
-        const signature = await extractWebserviceSignature({
-            moodlePath,
-            classFile: classFilePath,
-            classname: service.classname,
-            methodname
-        });
-        return { schema: assembleServiceSchema(service, signature) };
-    } catch (err) {
-        return formatSignatureError(service, classFilePath, err);
-    }
+    serviceErrors: WebServiceExtractionError[]
+): void {
+    serviceErrors.push({
+        serviceName: service.name,
+        classname: service.classname,
+        code: 'CLASS_NOT_FOUND',
+        message: `Could not resolve class file on disk for class '${service.classname}'`
+    });
 }
 
 /**
- * Processes a single Web Service: resolves its PHP class and extracts parameters and returns.
+ * Handles a successfully resolved class entry by queuing it into the batch queue.
  *
- * @param {MoodleService} service - Web Service definition.
- * @param {string} moodlePath - Root path of Moodle repository.
- * @returns {Promise<SingleServiceExtractionResult>} Result with schema or error.
+ * @param {ResolvedServiceEntry} entry - Resolved entry.
+ * @param {BatchServiceItem[]} batchItems - Target batch items list.
+ * @param {Map<string, MoodleService>} serviceMap - Services dictionary.
  */
-async function processSingleService(
-    service: MoodleService,
-    moodlePath: string
-): Promise<SingleServiceExtractionResult> {
-    const classFilePath = await resolveClass(service, moodlePath);
-    if (!classFilePath) {
-        return {
-            error: {
-                serviceName: service.name,
-                classname: service.classname,
-                code: 'CLASS_NOT_FOUND',
-                message: `Could not resolve class file on disk for class '${service.classname}'`
-            }
-        };
+function handleValidEntry(
+    entry: ResolvedServiceEntry,
+    batchItems: BatchServiceItem[],
+    serviceMap: Map<string, MoodleService>
+): void {
+    batchItems.push(toBatchItem(entry));
+    serviceMap.set(entry.service.name, entry.service);
+}
+
+/**
+ * Dispatches a resolved service entry to missing handler or valid batch queue.
+ *
+ * @param {ResolvedServiceEntry} entry - Candidate entry.
+ * @param {BatchServiceItem[]} batchItems - Target batch items list.
+ * @param {WebServiceExtractionError[]} serviceErrors - Errors list.
+ * @param {Map<string, MoodleService>} serviceMap - Services dictionary.
+ */
+function dispatchResolvedEntry(
+    entry: ResolvedServiceEntry,
+    batchItems: BatchServiceItem[],
+    serviceErrors: WebServiceExtractionError[],
+    serviceMap: Map<string, MoodleService>
+): void {
+    if (!entry.classFilePath) {
+        handleMissingClassEntry(entry.service, serviceErrors);
+        return;
     }
-    return safelyExtractSignature(service, classFilePath, moodlePath);
+    handleValidEntry(entry, batchItems, serviceMap);
 }
 
 /**
@@ -459,41 +455,88 @@ function resolveMoodlePath(rawPath: string): string {
 }
 
 /**
- * Appends single service result to schema list or error list.
+ * Maps a successful batch extraction signature to WebServiceSchema list.
  *
- * @param {SingleServiceExtractionResult} res - Result object.
+ * @param {MoodleService} service - Target service.
+ * @param {WebserviceSignature} signature - Extracted signature.
  * @param {WebServiceSchema[]} schemas - Target schema list.
- * @param {WebServiceExtractionError[]} errors - Target error list.
  */
-function accumulateResult(
-    res: SingleServiceExtractionResult,
-    schemas: WebServiceSchema[],
-    errors: WebServiceExtractionError[]
+function applyBatchSignature(
+    service: MoodleService,
+    signature: WebserviceSignature,
+    schemas: WebServiceSchema[]
 ): void {
-    if (res.schema) {
-        schemas.push(res.schema);
+    schemas.push(assembleServiceSchema(service, signature));
+}
+
+/**
+ * Maps a failed batch extraction item to WebServiceExtractionError list.
+ *
+ * @param {MoodleService} service - Target service.
+ * @param {string} errorMsg - Raw error string.
+ * @param {WebServiceExtractionError[]} serviceErrors - Errors list.
+ */
+function applyBatchError(
+    service: MoodleService,
+    errorMsg: string,
+    serviceErrors: WebServiceExtractionError[]
+): void {
+    serviceErrors.push({
+        serviceName: service.name,
+        classname: service.classname,
+        code: classifyExecutionError(errorMsg),
+        message: errorMsg,
+        cause: errorMsg
+    });
+}
+
+/**
+ * Maps batch extraction outcome for a single service.
+ *
+ * @param {MoodleService} service - Target service.
+ * @param {BatchExecutionResult} batchResult - Completed batch result.
+ * @param {WebServiceSchema[]} schemas - Output schemas.
+ * @param {WebServiceExtractionError[]} serviceErrors - Output errors.
+ */
+function mapServiceBatchOutcome(
+    service: MoodleService,
+    batchResult: BatchExecutionResult,
+    schemas: WebServiceSchema[],
+    serviceErrors: WebServiceExtractionError[]
+): void {
+    const sig = batchResult.signatures.get(service.name);
+    if (sig) {
+        applyBatchSignature(service, sig, schemas);
+        return;
     }
-    if (res.error) {
-        errors.push(res.error);
+    const err = batchResult.errors.get(service.name);
+    if (err) {
+        applyBatchError(service, err, serviceErrors);
     }
 }
 
 /**
- * Partitions parallel service extraction results into schemas and non-fatal errors.
+ * Collects outcomes across all dispatched batch items.
  *
- * @param {SingleServiceExtractionResult[]} results - Array of extraction results.
- * @returns {{ schemas: WebServiceSchema[]; serviceErrors: WebServiceExtractionError[] }} Partitioned output.
+ * @param {BatchServiceItem[]} batchItems - Processed batch items.
+ * @param {Map<string, MoodleService>} serviceMap - Service dictionary.
+ * @param {BatchExecutionResult} batchResult - Completed batch result.
+ * @param {WebServiceSchema[]} schemas - Target schemas.
+ * @param {WebServiceExtractionError[]} serviceErrors - Target errors.
  */
-function partitionResults(results: SingleServiceExtractionResult[]): {
-    schemas: WebServiceSchema[];
-    serviceErrors: WebServiceExtractionError[];
-} {
-    const schemas: WebServiceSchema[] = [];
-    const serviceErrors: WebServiceExtractionError[] = [];
-    for (const res of results) {
-        accumulateResult(res, schemas, serviceErrors);
+function collectBatchOutcomes(
+    batchItems: BatchServiceItem[],
+    serviceMap: Map<string, MoodleService>,
+    batchResult: BatchExecutionResult,
+    schemas: WebServiceSchema[],
+    serviceErrors: WebServiceExtractionError[]
+): void {
+    for (const item of batchItems) {
+        const service = serviceMap.get(item.serviceName);
+        if (service) {
+            mapServiceBatchOutcome(service, batchResult, schemas, serviceErrors);
+        }
     }
-    return { schemas, serviceErrors };
 }
 
 /**
@@ -565,6 +608,39 @@ function findUnmatchedFilterErrors(
 }
 
 /**
+ * Resolves class paths for all services in parallel.
+ *
+ * @param {MoodleService[]} services - Filtered services.
+ * @param {string} moodlePath - Moodle codebase path.
+ * @returns {Promise<ResolvedServiceEntry[]>} Array of resolved entries.
+ */
+async function resolveAllEntries(
+    services: MoodleService[],
+    moodlePath: string
+): Promise<ResolvedServiceEntry[]> {
+    return Promise.all(services.map(s => resolveServiceEntry(s, moodlePath)));
+}
+
+/**
+ * Populates batch items and service errors from resolved entries.
+ *
+ * @param {ResolvedServiceEntry[]} entries - Resolved entries list.
+ * @param {BatchServiceItem[]} batchItems - Target items array.
+ * @param {WebServiceExtractionError[]} serviceErrors - Target errors array.
+ * @param {Map<string, MoodleService>} serviceMap - Target map.
+ */
+function populateBatchQueue(
+    entries: ResolvedServiceEntry[],
+    batchItems: BatchServiceItem[],
+    serviceErrors: WebServiceExtractionError[],
+    serviceMap: Map<string, MoodleService>
+): void {
+    for (const entry of entries) {
+        dispatchResolvedEntry(entry, batchItems, serviceErrors, serviceMap);
+    }
+}
+
+/**
  * Extracts and filters services from discovered services.php files.
  *
  * @param {string[]} serviceFiles - Discovered services.php paths.
@@ -581,11 +657,18 @@ async function extractDiscoveredServices(
     const filterErrors = findUnmatchedFilterErrors(options.services, allServices);
     const filtered = allServices.filter(s => matchesAnyFilter(s.name, options.services));
 
-    const limit = pLimit(options.concurrency ?? 8);
-    const tasks = filtered.map(service => limit(() => processSingleService(service, moodlePath)));
-    const results = await Promise.all(tasks);
+    const entries = await resolveAllEntries(filtered, moodlePath);
+    const batchItems: BatchServiceItem[] = [];
+    const serviceErrors: WebServiceExtractionError[] = [];
+    const serviceMap = new Map<string, MoodleService>();
 
-    const { schemas, serviceErrors } = partitionResults(results);
+    populateBatchQueue(entries, batchItems, serviceErrors, serviceMap);
+
+    const batchResult = await extractBatchSignatures(batchItems, moodlePath);
+    const schemas: WebServiceSchema[] = [];
+
+    collectBatchOutcomes(batchItems, serviceMap, batchResult, schemas, serviceErrors);
+
     return { schemas, errors: [...filterErrors, ...serviceErrors] };
 }
 

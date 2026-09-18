@@ -28,10 +28,26 @@ const BOOLEAN_TYPES = new Set([
 ]);
 
 /**
- * Dynamically resolves any Moodle parameter type (PARAM_* or raw string) to its primitive type.
+ * Matches normalized type against numeric or boolean type sets.
  *
- * Moodle evaluates parameters internally via `clean_param($param, $type)`:
- * - PARAM_INT / PARAM_FLOAT -> cast to integer or float (`number`)
+ * @param {string} normalized - Normalized type name.
+ * @returns {PrimitiveType | null} Resolved primitive type or null.
+ */
+function matchNonStringType(normalized: string): PrimitiveType | null {
+    if (NUMERIC_TYPES.has(normalized)) {
+        return 'number';
+    }
+    if (BOOLEAN_TYPES.has(normalized)) {
+        return 'boolean';
+    }
+    return null;
+}
+
+/**
+ * Resolves the corresponding TypeScript primitive type name from a Moodle parameter definition.
+ *
+ * Moodle parameters are categorized as:
+ * - PARAM_INT, PARAM_FLOAT, int, float -> mapped to numeric primitives (`number`)
  * - PARAM_BOOL -> cast to boolean (`boolean`)
  * - All other PARAM_* types (text, notags, raw, plugin, etc.) -> processed as strings (`string`)
  *
@@ -52,12 +68,5 @@ export function resolvePrimitiveType(moodleType?: unknown): PrimitiveType {
     }
 
     const normalized = moodleType.trim().toLowerCase();
-    if (NUMERIC_TYPES.has(normalized)) {
-        return 'number';
-    }
-    if (BOOLEAN_TYPES.has(normalized)) {
-        return 'boolean';
-    }
-
-    return 'string';
+    return matchNonStringType(normalized) ?? 'string';
 }
