@@ -9,7 +9,11 @@ import { resolveAllSubplugins } from './component/subcomponent-resolver';
 import { findFiles } from '../scanner/scanner';
 
 const versionComponentCache = new Map<string, ComponentMapRegistry>();
-const SUBPLUGIN_IGNORED_DIRS = ['node_modules', 'vendor', '.git', 'tests', 'fixtures'];
+const inFlightComponentMap = new Map<string, Promise<ComponentMapRegistry>>();
+const SUBPLUGIN_IGNORED_DIRS = [
+    'node_modules', 'vendor', '.git', 'tests', 'fixtures',
+    'cache', 'localcache', 'pix', 'theme', 'lang', 'install'
+];
 
 /**
  * Clears the cached component maps in memory (optionally for a specific version).
@@ -28,6 +32,7 @@ export function clearComponentCache(version?: string): void {
         return;
     }
     versionComponentCache.clear();
+    inFlightComponentMap.clear();
 }
 
 /**
@@ -177,6 +182,29 @@ async function enrichWithSubplugins(
 }
 
 /**
+ * Resolves component registry internally and caches by version.
+ *
+ * @param {string} moodlePath - Root path of Moodle repository.
+ * @returns {Promise<ComponentMapRegistry>} Populated component registry.
+ */
+async function buildComponentRegistry(moodlePath: string): Promise<ComponentMapRegistry> {
+    const version = await resolveVersion(moodlePath);
+    const cached = versionComponentCache.get(version);
+    if (cached) {
+        return cached;
+    }
+
+    const strategy = determineStrategy(version);
+    const plugintypes = await dispatchPlugintypesResolution(strategy, moodlePath);
+    await enrichWithSubplugins(strategy, plugintypes, moodlePath);
+    const subsystems = await dispatchSubsystemsResolution(strategy, moodlePath);
+
+    const registry: ComponentMapRegistry = { plugintypes, subsystems };
+    versionComponentCache.set(version, registry);
+    return registry;
+}
+
+/**
  * Resolves physical base directory paths for Moodle components across any Moodle version (>= 2.0).
  *
  * Automatically detects version, delegates to dedicated strategy handlers,
@@ -197,19 +225,13 @@ export async function resolverComponent(
     moodlePath: string,
     _pathPatterns?: string[]
 ): Promise<ComponentMapRegistry> {
-    const version = await resolveVersion(moodlePath);
-    const cached = versionComponentCache.get(version);
-    if (cached) {
-        return cached;
+    const inFlight = inFlightComponentMap.get(moodlePath);
+    if (inFlight) {
+        return inFlight;
     }
-
-    const strategy = determineStrategy(version);
-    const plugintypes = await dispatchPlugintypesResolution(strategy, moodlePath);
-    await enrichWithSubplugins(strategy, plugintypes, moodlePath);
-    const subsystems = await dispatchSubsystemsResolution(strategy, moodlePath);
-
-    const registry: ComponentMapRegistry = { plugintypes, subsystems };
-    versionComponentCache.set(version, registry);
-
-    return registry;
+    const task = buildComponentRegistry(moodlePath).finally(() => {
+        inFlightComponentMap.delete(moodlePath);
+    });
+    inFlightComponentMap.set(moodlePath, task);
+    return task;
 }
