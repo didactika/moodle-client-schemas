@@ -1,4 +1,4 @@
-import { resolveVersion } from '../../../../src/webservice-extractor/resolver/version-resolver';
+import { resolveVersion, clearVersionCache } from '../../../../src/webservice-extractor/resolver/version-resolver';
 import * as AstManager from '../../../../src/webservice-extractor/cache/ast-manager';
 
 jest.mock('../../../../src/webservice-extractor/cache/ast-manager');
@@ -7,6 +7,7 @@ describe('Unit Test: version-resolver (Single Responsibility: Version Detection)
 
     afterEach(() => {
         jest.clearAllMocks();
+        clearVersionCache();
     });
 
     describe('resolveVersion', () => {
@@ -77,6 +78,37 @@ describe('Unit Test: version-resolver (Single Responsibility: Version Detection)
 
             const version = await resolveVersion(moodlePath);
             expect(version).toBe('3.11.2');
+        });
+
+        it('should resolve version from public/version.php when root version.php is absent (Moodle >= 5)', async () => {
+            const moodlePath = './moodle5';
+            const mockVersionAst = {
+                kind: 'program',
+                children: [
+                    {
+                        kind: 'expressionstatement',
+                        expression: {
+                            kind: 'assign',
+                            left: { kind: 'variable', name: 'release' },
+                            right: { kind: 'string', value: '5.2.2 (Build: 20260810)' }
+                        }
+                    }
+                ]
+            };
+
+            (AstManager.getAst as jest.Mock).mockImplementation((file: string) => {
+                if (file === 'version.php') {
+                    return Promise.reject(new Error('Not found at root'));
+                }
+                if (file === 'public/version.php') {
+                    return Promise.resolve(mockVersionAst);
+                }
+                return Promise.reject(new Error('Not found'));
+            });
+
+            const version = await resolveVersion(moodlePath);
+            expect(version).toBe('5.2.2');
+            expect(AstManager.getAst).toHaveBeenCalledWith('public/version.php', moodlePath);
         });
 
         it('should throw descriptive error when release variable is missing in version.php AST', async () => {

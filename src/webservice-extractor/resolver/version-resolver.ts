@@ -165,19 +165,49 @@ interface DirectResult {
     release: string | null;
 }
 
+const versionCache = new Map<string, string>();
+
 /**
- * Attempts to load version.php directly from root.
+ * Clears the in-memory version cache.
+ *
+ * @param {string} [moodlePath] - Optional path to invalidate.
+ */
+export function clearVersionCache(moodlePath?: string): void {
+    if (moodlePath) {
+        versionCache.delete(moodlePath);
+        return;
+    }
+    versionCache.clear();
+}
+
+/**
+ * Attempts to load version.php directly from candidate relative path.
+ *
+ * @param {string} relPath - Relative file path.
+ * @param {string} moodlePath - Root path of Moodle repository.
+ * @returns {Promise<DirectResult>} Result object.
+ */
+async function tryFileDirect(relPath: string, moodlePath: string): Promise<DirectResult> {
+    try {
+        const ast = await getAst(relPath, moodlePath);
+        return { found: true, release: extractReleaseString(ast) };
+    } catch {
+        return { found: false, release: null };
+    }
+}
+
+/**
+ * Attempts to load version.php directly from root (Moodle < 5) or public directory (Moodle >= 5).
  *
  * @param {string} moodlePath - Root path of Moodle repository.
  * @returns {Promise<DirectResult>} Result object.
  */
 async function tryDirectVersion(moodlePath: string): Promise<DirectResult> {
-    try {
-        const ast = await getAst('version.php', moodlePath);
-        return { found: true, release: extractReleaseString(ast) };
-    } catch {
-        return { found: false, release: null };
+    const rootResult = await tryFileDirect('version.php', moodlePath);
+    if (rootResult.found) {
+        return rootResult;
     }
+    return tryFileDirect('public/version.php', moodlePath);
 }
 
 /**
@@ -252,6 +282,12 @@ function validateCleanVersion(rawRelease: string): string {
  * @throws {Error} When version.php is unreadable or does not contain a valid release variable.
  */
 export async function resolveVersion(moodlePath: string): Promise<string> {
+    const cached = versionCache.get(moodlePath);
+    if (cached) {
+        return cached;
+    }
     const rawRelease = await discoverReleaseString(moodlePath);
-    return validateCleanVersion(rawRelease);
+    const clean = validateCleanVersion(rawRelease);
+    versionCache.set(moodlePath, clean);
+    return clean;
 }

@@ -19,6 +19,8 @@ import { findFiles } from './scanner/scanner';
 import { getAst, clearAstCache } from './cache/ast-manager';
 import { extractServices } from './extractor/service-extractor';
 import { resolveClass } from './resolver/class-resolver';
+import { clearVersionCache } from './resolver/version-resolver';
+import { clearComponentCache } from './resolver/component-resolver';
 import { sanitizeDescription } from './utils/description-utils';
 import { cleanupPhpRuntime, validatePhpRuntime } from './adapter/php-runtime';
 import { extractBatchSignatures } from './adapter/batch-signature-extractor';
@@ -735,6 +737,8 @@ export async function extractWebservice(
         return await extractDiscoveredServices(serviceFiles, moodlePath, options);
     } finally {
         clearAstCache();
+        clearVersionCache();
+        clearComponentCache();
         await cleanupPhpRuntime();
     }
 }
