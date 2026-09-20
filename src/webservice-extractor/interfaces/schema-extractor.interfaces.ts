@@ -55,6 +55,27 @@ export interface ExtractWebserviceResult {
 }
 
 /**
+ * Progress status snapshot emitted during web service schema extraction.
+ */
+export interface WebServiceProgress {
+    /** Total number of services discovered for extraction */
+    total: number;
+    /** Number of services successfully or error-completed */
+    completed: number;
+    /** Current web service name being processed */
+    currentService?: string;
+    /** Percentage completed from 0 to 100 */
+    percent: number;
+    /** Formatted estimated time of arrival string (e.g. '~3s left') */
+    eta: string;
+}
+
+/**
+ * Progress option: boolean to show console loading card with ETA, or callback function.
+ */
+export type ProgressOption = boolean | ((progress: WebServiceProgress) => void);
+
+/**
  * Options for extracting web services.
  */
 export interface ExtractWebserviceOptions {
@@ -68,6 +89,11 @@ export interface ExtractWebserviceOptions {
     services?: string[];
     /** Concurrency limit for parallel signature extraction (default: 8) */
     concurrency?: number;
+    /**
+     * Enable terminal progress loading card with ETA, or provide a custom progress callback.
+     * Set to true to print a live terminal card with progress bar and ETA.
+     */
+    progress?: ProgressOption;
 }
 
 /**

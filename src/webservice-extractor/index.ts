@@ -6,13 +6,16 @@ import {
     WebServiceExtractionError,
     ExtractWebserviceResult,
     WebServiceErrorCode,
-    ExtractWebserviceOptions
+    ExtractWebserviceOptions,
+    ProgressOption,
+    WebServiceProgress
 } from './interfaces/schema-extractor.interfaces';
 import { WebserviceSignature } from './interfaces/signature.interfaces';
 import {
     ResolvedServiceEntry,
     BatchServiceItem,
-    BatchExecutionResult
+    BatchExecutionResult,
+    BatchProgressHandler
 } from './interfaces/batch.interfaces';
 
 import { findFiles } from './scanner/scanner';
@@ -24,8 +27,9 @@ import { clearComponentCache } from './resolver/component-resolver';
 import { sanitizeDescription } from './utils/description-utils';
 import { cleanupPhpRuntime, validatePhpRuntime } from './adapter/php-runtime';
 import { extractBatchSignatures } from './adapter/batch-signature-extractor';
+import { ConsoleProgressRenderer, calculateEta } from './utils/console-progress';
 
-export { ExtractWebserviceOptions };
+export { ExtractWebserviceOptions, ProgressOption, WebServiceProgress };
 
 /**
  * Checks if a service name matches a wildcard prefix filter.
@@ -643,6 +647,129 @@ function populateBatchQueue(
 }
 
 /**
+ * Calculates integer completion percentage between 0 and 100.
+ *
+ * @param {number} completed - Completed count.
+ * @param {number} total - Total count.
+ * @returns {number} Integer percentage.
+ */
+function calculatePercent(completed: number, total: number): number {
+    if (total <= 0) {
+        return 0;
+    }
+    return Math.min(100, Math.round((completed / total) * 100));
+}
+
+/**
+ * Notifies progress callback with formatted ETA and progress details.
+ *
+ * @param {((progress: WebServiceProgress) => void)} fn - Target callback.
+ * @param {number} completed - Completed items.
+ * @param {number} total - Total items.
+ * @param {number} startTime - Start timestamp.
+ * @param {string} [serviceName] - Active service name.
+ */
+function notifyCallback(
+    fn: (progress: WebServiceProgress) => void,
+    completed: number,
+    total: number,
+    startTime: number,
+    serviceName?: string
+): void {
+    const percent = calculatePercent(completed, total);
+    const eta = calculateEta(completed, total, startTime);
+    fn({ total, completed, currentService: serviceName, percent, eta });
+}
+
+/**
+ * Creates a batch progress handler delegating to a custom progress callback.
+ *
+ * @param {((progress: WebServiceProgress) => void)} fn - Progress callback.
+ * @param {number} total - Total count.
+ * @returns {BatchProgressHandler} Initialized handler.
+ */
+function createCallbackProgress(
+    fn: (progress: WebServiceProgress) => void,
+    total: number
+): BatchProgressHandler {
+    const startTime = performance.now();
+    return {
+        onProgress: (completed, tot, serviceName) => notifyCallback(fn, completed, tot, startTime, serviceName),
+        finish: () => notifyCallback(fn, total, total, startTime, 'Completed')
+    };
+}
+
+/**
+ * Creates a batch progress handler rendering the interactive terminal card.
+ *
+ * @param {number} total - Total count.
+ * @returns {BatchProgressHandler} Initialized handler.
+ */
+function createConsoleProgress(total: number): BatchProgressHandler {
+    const renderer = new ConsoleProgressRenderer(total);
+    return {
+        onProgress: (completed, _tot, serviceName) => renderer.update(completed, serviceName),
+        finish: () => renderer.finish()
+    };
+}
+
+/**
+ * Creates a no-op progress handler when progress reporting is disabled.
+ *
+ * @returns {BatchProgressHandler} No-op handler.
+ */
+function createNoopProgress(): BatchProgressHandler {
+    return {
+        finish: () => {}
+    };
+}
+
+/**
+ * Determines whether progress reporting should be enabled.
+ *
+ * @param {number} total - Total items count.
+ * @param {ProgressOption} [progressOption] - Configured option.
+ * @returns {boolean} True if progress is enabled.
+ */
+function shouldEnableProgress(total: number, progressOption?: ProgressOption): boolean {
+    return total > 0 && Boolean(progressOption);
+}
+
+/**
+ * Resolves active progress handler based on progress option type.
+ *
+ * @param {number} total - Total count.
+ * @param {ProgressOption} progressOption - Configured option.
+ * @returns {BatchProgressHandler} Initialized handler.
+ */
+function resolveActiveProgress(
+    total: number,
+    progressOption: ProgressOption
+): BatchProgressHandler {
+    if (typeof progressOption === 'function') {
+        return createCallbackProgress(progressOption, total);
+    }
+    return createConsoleProgress(total);
+}
+
+/**
+ * Creates the appropriate progress handler for the batch execution.
+ *
+ * @param {number} total - Total count.
+ * @param {ProgressOption} [progressOption] - Configured option.
+ * @returns {BatchProgressHandler} Initialized handler.
+ */
+function createProgressHandler(
+    total: number,
+    progressOption?: ProgressOption
+): BatchProgressHandler {
+    if (!shouldEnableProgress(total, progressOption)) {
+        return createNoopProgress();
+    }
+    return resolveActiveProgress(total, progressOption as ProgressOption);
+}
+
+/**
  * Extracts and filters services from discovered services.php files.
  *
  * @param {string[]} serviceFiles - Discovered services.php paths.
@@ -666,12 +793,22 @@ async function extractDiscoveredServices(
 
     populateBatchQueue(entries, batchItems, serviceErrors, serviceMap);
 
-    const batchResult = await extractBatchSignatures(batchItems, moodlePath);
-    const schemas: WebServiceSchema[] = [];
+    const progressHandler = createProgressHandler(batchItems.length, options.progress);
+    try {
+        const batchResult = await extractBatchSignatures(
+            batchItems,
+            moodlePath,
+            15000,
+            progressHandler.onProgress
+        );
+        const schemas: WebServiceSchema[] = [];
 
-    collectBatchOutcomes(batchItems, serviceMap, batchResult, schemas, serviceErrors);
+        collectBatchOutcomes(batchItems, serviceMap, batchResult, schemas, serviceErrors);
 
-    return { schemas, errors: [...filterErrors, ...serviceErrors] };
+        return { schemas, errors: [...filterErrors, ...serviceErrors] };
+    } finally {
+        progressHandler.finish();
+    }
 }
 
 /**

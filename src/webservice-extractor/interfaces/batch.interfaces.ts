@@ -64,3 +64,12 @@ export interface BatchExecutionResult {
     uncompleted: BatchServiceItem[];
 }
 
+/**
+ * Progress lifecycle handler for batch extraction sessions.
+ */
+export interface BatchProgressHandler {
+    onProgress?: (completed: number, total: number, serviceName?: string) => void;
+    finish: () => void;
+}
+
+
