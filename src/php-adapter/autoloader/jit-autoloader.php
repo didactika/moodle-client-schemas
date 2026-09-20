@@ -29,6 +29,18 @@ class JitAutoloader {
         $namespace  = count($parts) > 1 ? implode('\\', array_slice($parts, 0, -1)) : '';
 
         if (in_array($shortName, ['renderable', 'templatable', 'named_templatable', 'cacheable_object', 'cachable_object', 'cacheable_object_array']) || str_ends_with($shortName, '_interface')) {
+            if (interface_exists($fallbackClass, false) || interface_exists($shortName, false)) {
+                return true;
+            }
+            if (isset($GLOBALS['CFG']) && !empty($GLOBALS['CFG']->libdir)) {
+                $outputComp = $GLOBALS['CFG']->libdir . '/outputcomponents.php';
+                if (file_exists($outputComp)) {
+                    @require_once $outputComp;
+                    if (interface_exists($fallbackClass, false) || interface_exists($shortName, false)) {
+                        return true;
+                    }
+                }
+            }
             $code = ($namespace !== '' ? "namespace $namespace;\n" : '') . "interface $shortName {}";
             @eval($code);
             return true;

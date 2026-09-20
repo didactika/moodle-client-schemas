@@ -98,9 +98,9 @@ class SyntaxNormalizer {
 
         $modified = false;
 
-        // 1. Remove legacy class object extends stdClass
+        // 1. Remove legacy class object extends stdClass (renamed to avoid reserved keyword and preserve balanced braces)
         if (str_contains($content, 'class object extends stdClass')) {
-            $content = preg_replace('/class\s+object\s+extends\s+stdClass\s*\{[^}]*\};?/i', '', $content);
+            $content = preg_replace('/class\s+object\s+extends\s+stdClass/i', 'class moodle_deprecated_object extends stdClass', $content);
             $modified = true;
         }
 
