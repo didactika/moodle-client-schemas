@@ -5,7 +5,9 @@ export {
     WebServiceSchema,
     WebServiceExtractionError,
     ExtractWebserviceResult,
-    WebServiceErrorCode
+    WebServiceErrorCode,
+    WebServiceProgress,
+    ProgressOption
 } from './webservice-extractor/interfaces/schema-extractor.interfaces';
 export {
     WebServiceParametersSchema,

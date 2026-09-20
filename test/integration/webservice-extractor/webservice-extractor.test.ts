@@ -96,4 +96,40 @@ describe('Integration Flow: extractWebservice (Functional Pipeline)', () => {
         expect(errors[0].serviceName).toBe('unknown_service');
     });
 
+    it('should invoke progress callback and console progress when progress option is enabled', async () => {
+        const moodlePath = path.resolve('./test/fixtures/mock_moodle');
+
+        (Scanner.findFiles as jest.Mock).mockResolvedValue([
+            './test/fixtures/mock_moodle/mod/sample/db/services.php'
+        ]);
+        (AstManager.getAst as jest.Mock).mockResolvedValue({ type: 'Program', body: [] });
+        (ServiceExtractor.extractServices as jest.Mock).mockReturnValue([{
+            name: 'mod_sample_service',
+            classname: 'test_fixtures\\sample',
+            methodname: 'execute'
+        }]);
+        (ClassResolver.resolveClass as jest.Mock).mockResolvedValue('sample.php');
+        (PhpSignatureExtractor.extractWebserviceSignature as jest.Mock).mockResolvedValue({
+            parameters: { keys: {} },
+            returns: { keys: {} }
+        });
+
+        const progressUpdates: unknown[] = [];
+        const resultWithCallback = await extractWebservice({
+            moodlePath,
+            progress: (p) => progressUpdates.push(p)
+        });
+
+        expect(resultWithCallback.schemas).toHaveLength(1);
+        expect(progressUpdates.length).toBeGreaterThan(0);
+        expect((progressUpdates[0] as { total: number }).total).toBe(1);
+
+        const resultWithBool = await extractWebservice({
+            moodlePath,
+            progress: true
+        });
+        expect(resultWithBool.schemas).toHaveLength(1);
+    });
+
 });
+
