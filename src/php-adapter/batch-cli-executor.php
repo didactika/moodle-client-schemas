@@ -170,6 +170,7 @@ require_once __DIR__ . '/autoloader/jit-autoloader.php';
 $safeCoreLibraries = [
     $CFG->dirroot . '/cache/classes/interfaces.php',
     $CFG->libdir . '/setuplib.php',
+    $CFG->libdir . '/outputcomponents.php',
     $CFG->libdir . '/outputrenderers.php',
     $CFG->libdir . '/accesslib.php',
     $CFG->libdir . '/modinfolib.php',
