@@ -27,7 +27,7 @@ dist-ssr
 # Temporary downloaded repositories and schemas
 tmp
 .ast_cache/
-schemas/
+/schemas/
 
 # testing
 coverage/
