@@ -18,3 +18,14 @@ export {
     WebServiceBaseSchema,
     WebServiceSchemaKind
 } from './webservice-extractor/interfaces/signature.interfaces';
+
+// HTTP and response types
+export type { HttpMethod, MoodleResponse } from './types/http.types';
+
+// Generator pipeline & interfaces
+export { runGeneratorPipeline, generateWebserviceFiles } from './generator/generator-pipeline';
+export { loadOrCreateConfig, normalizeMoodleVersion } from './generator/config/config-manager';
+export type { MoodleClientConfig, RawMoodleClientConfig } from './generator/interfaces/config.interfaces';
+export type { GeneratedServiceMetadata } from './generator/interfaces/generator.interfaces';
+
+// Preloaded schemas are re-exported via declaration in dist/index.d.ts
