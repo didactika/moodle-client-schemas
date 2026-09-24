@@ -12,6 +12,10 @@
       "require": "./dist/index.js"
     }
   },
+  "bin": {
+    "moodle-client-schemas": "./dist/cli.js",
+    "moodle-schemas": "./dist/cli.js"
+  },
   "files": [
     "dist",
     "src/php-adapter"

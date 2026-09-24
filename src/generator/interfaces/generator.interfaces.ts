@@ -1,5 +1,5 @@
+import { WebServiceSchema } from '../../webservice-extractor/interfaces/schema-extractor.interfaces';
 import {
-    WebServiceSchema,
     WebServiceParametersSchema,
     WebServiceReturnSchema,
     WebServiceObjectSchema,
@@ -8,7 +8,7 @@ import {
     WebServiceBaseSchema,
     WebServiceSchemaKind,
     PrimitiveType
-} from '../../webservice-extractor';
+} from '../../webservice-extractor/interfaces/signature.interfaces';
 
 export {
     WebServiceSchema,
