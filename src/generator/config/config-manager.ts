@@ -26,6 +26,23 @@ export function normalizeMoodleVersion(version: string): string {
 }
 
 /**
+ * Checks whether a given Moodle version is supported (>= 2.0).
+ * Web services infrastructure was introduced in Moodle 2.0; versions < 2 are unsupported.
+ *
+ * @param {string} version - Full or partial version string
+ * @returns {boolean} True if version is 2.0 or higher
+ */
+export function isMoodleVersionSupported(version: string): boolean {
+    const clean = version.trim().replace(/^v/i, '');
+    const match = clean.match(/^(\d+)(?:\.(\d+))?/);
+    if (!match || !match[1]) {
+        return false;
+    }
+    const major = parseInt(match[1], 10);
+    return major >= 2;
+}
+
+/**
  * Loads existing configuration or creates a default one if absent.
  * - If `moodlePath` is defined -> `isLocal = true`
  * - If `moodlePath` is omitted -> `isLocal = false`
@@ -91,7 +108,17 @@ export async function loadOrCreateConfig(
         });
     }
 
-    const version = normalizeMoodleVersion(parsed.version || defaultVersion);
+    const rawVersion = parsed.version || defaultVersion;
+    if (!isMoodleVersionSupported(rawVersion)) {
+        throw new MoodleGeneratorError({
+            code: 'ERR_MOODLE_VERSION_UNSUPPORTED',
+            title: 'Unsupported Moodle Version',
+            details: `Moodle version '${rawVersion}' is not supported. Web services schema generation requires Moodle 2.0 or higher.`,
+            action: `Set "version" to a supported Moodle version (>= 2.0, e.g. "4.5") in '${path.basename(resolvedConfigPath)}'.`
+        });
+    }
+
+    const version = normalizeMoodleVersion(rawVersion);
     const webservices = parsed.webservices && parsed.webservices.length > 0 ? parsed.webservices : ['*'];
     const moodlePath = parsed.moodlePath;
     const isLocal = Boolean(moodlePath);

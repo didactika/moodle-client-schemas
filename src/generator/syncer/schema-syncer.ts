@@ -8,9 +8,9 @@ export const SUPPORTED_PACKAGE_NAMES = [
 ];
 
 /**
- * Finds the root directory of the installed or linked @didactika/moodle-client or @didactika/moodle-client-schemas package.
+ * Finds the root directory of the installed @didactika/moodle-client-schemas or @didactika/moodle-client package.
  *
- * @param {string} baseDir - Directory to start search from (usually where config is located)
+ * @param {string} baseDir - Directory to start search from (where config is located)
  * @returns {string | null} Package directory or null if not found
  */
 export function findPackageDir(baseDir: string): string | null {
@@ -21,7 +21,7 @@ export function findPackageDir(baseDir: string): string | null {
             return directBaseCand;
         }
 
-        // 2. Try require.resolve starting specifically from baseDir
+        // 2. Standard require.resolve relative to baseDir
         try {
             const pkgJsonPath = require.resolve(`${pkgName}/package.json`, {
                 paths: [baseDir]
@@ -38,7 +38,7 @@ export function findPackageDir(baseDir: string): string | null {
         }
     }
 
-    // 4. Ascend upwards from baseDir or cwd to check if we are inside either package itself
+    // 4. Ascend upwards to check if running from inside the package directory itself
     const startDirs = [baseDir, process.cwd()];
     for (const start of startDirs) {
         let current = path.resolve(start);
@@ -70,15 +70,7 @@ export function findPackageDir(baseDir: string): string | null {
 export function resolveInternalPackageSchemasDir(baseDir: string): string {
     const pkgDir = findPackageDir(baseDir);
     if (pkgDir) {
-        const distSchemas = path.join(pkgDir, 'dist/schemas');
-        const srcSchemas = path.join(pkgDir, 'src/schemas');
-        if (existsSync(path.join(pkgDir, 'dist'))) {
-            return distSchemas;
-        }
-        if (existsSync(path.join(pkgDir, 'src'))) {
-            return srcSchemas;
-        }
-        return distSchemas;
+        return path.join(pkgDir, 'dist/schemas');
     }
     return path.resolve(baseDir, 'node_modules/@didactika/moodle-client/dist/schemas');
 }
@@ -106,14 +98,14 @@ export async function hasExistingSchemas(dir: string): Promise<boolean> {
 }
 
 /**
- * Recursively copies all .ts files from src to dest, optionally writing .d.ts alongside them.
+ * Recursively copies schema files from src to dest as TypeScript declaration files (.d.ts).
+ * In dist/ directory, only emits .d.ts files to keep package distributions pure.
  *
  * @param {string} src - Source folder
  * @param {string} dest - Destination folder
- * @param {boolean} emitDts - Whether to emit .d.ts files alongside .ts files
  * @returns {Promise<number>} Number of schema files copied
  */
-async function copyDir(src: string, dest: string, emitDts: boolean): Promise<number> {
+async function copyDir(src: string, dest: string): Promise<number> {
     await fs.mkdir(dest, { recursive: true });
     let count = 0;
     const entries = await fs.readdir(src, { withFileTypes: true });
@@ -123,18 +115,13 @@ async function copyDir(src: string, dest: string, emitDts: boolean): Promise<num
         const destPath = path.join(dest, entry.name);
 
         if (entry.isDirectory()) {
-            count += await copyDir(srcPath, destPath, emitDts);
+            count += await copyDir(srcPath, destPath);
         } else if (entry.name.endsWith('.d.ts') || entry.name.endsWith('.ts')) {
             const content = await fs.readFile(srcPath, 'utf-8');
-            await fs.writeFile(destPath, content, 'utf-8');
-
-            if (entry.name.endsWith('.d.ts')) {
-                const tsPath = destPath.replace(/\.d\.ts$/, '.ts');
-                await fs.writeFile(tsPath, content, 'utf-8');
-            } else if (entry.name.endsWith('.ts') && emitDts) {
-                const dtsPath = destPath.replace(/\.ts$/, '.d.ts');
-                await fs.writeFile(dtsPath, content, 'utf-8');
-            }
+            const dtsPath = destPath.endsWith('.d.ts')
+                ? destPath
+                : destPath.replace(/\.ts$/, '.d.ts');
+            await fs.writeFile(dtsPath, content, 'utf-8');
             count++;
         }
     }
@@ -142,9 +129,9 @@ async function copyDir(src: string, dest: string, emitDts: boolean): Promise<num
 }
 
 /**
- * Synchronizes schemas from source directory (e.g. outDir) into the internal
- * package directories (dist/schemas and src/schemas if present).
- * Also ensures dist/index.d.ts re-exports from ./schemas/index.
+ * Synchronizes schemas from source directory (e.g. outDir) into the installed
+ * package's dist/schemas directory.
+ * Also ensures declaration files re-export from ./schemas/index.
  *
  * @param {string} sourceDir - Source directory containing generated schema files
  * @param {string} baseDir - Directory where config file is located
@@ -163,19 +150,13 @@ export async function syncSchemas(
         const distSchemas = path.join(pkgDir, 'dist/schemas');
         if (path.resolve(distSchemas) !== resolvedSource) {
             targets.push(distSchemas);
-            syncedCount = await copyDir(resolvedSource, distSchemas, true);
-        }
-
-        const srcSchemas = path.join(pkgDir, 'src/schemas');
-        if (existsSync(path.join(pkgDir, 'src')) && path.resolve(srcSchemas) !== resolvedSource) {
-            targets.push(srcSchemas);
-            await copyDir(resolvedSource, srcSchemas, false);
+            syncedCount = await copyDir(resolvedSource, distSchemas);
         }
     } else {
         const fallbackTarget = path.resolve(baseDir, 'node_modules/@didactika/moodle-client/dist/schemas');
         if (path.resolve(fallbackTarget) !== resolvedSource) {
             targets.push(fallbackTarget);
-            syncedCount = await copyDir(resolvedSource, fallbackTarget, true);
+            syncedCount = await copyDir(resolvedSource, fallbackTarget);
         }
     }
 

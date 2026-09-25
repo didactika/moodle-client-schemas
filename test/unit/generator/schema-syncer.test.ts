@@ -101,10 +101,8 @@ describe('Schema Syncer Utility', () => {
         const distSchemas = path.join(mockPkgDir, 'dist/schemas');
         expect(targets).toContain(distSchemas);
 
-        // Verify both .ts and .d.ts were created
-        expect(await fs.access(path.join(distSchemas, 'index.ts')).then(() => true).catch(() => false)).toBe(true);
+        // Verify .d.ts files were created in dist
         expect(await fs.access(path.join(distSchemas, 'index.d.ts')).then(() => true).catch(() => false)).toBe(true);
-        expect(await fs.access(path.join(distSchemas, 'core/user/get_users.webservice-client.ts')).then(() => true).catch(() => false)).toBe(true);
         expect(await fs.access(path.join(distSchemas, 'core/user/get_users.webservice-client.d.ts')).then(() => true).catch(() => false)).toBe(true);
 
         // Verify index.d.ts was augmented with export * from "./schemas/index"
@@ -118,3 +116,4 @@ describe('Schema Syncer Utility', () => {
         expect(resolved).toContain('schemas');
     });
 });
+

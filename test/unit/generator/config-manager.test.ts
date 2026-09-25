@@ -4,6 +4,7 @@ import os from 'os';
 import {
     loadOrCreateConfig,
     normalizeMoodleVersion,
+    isMoodleVersionSupported,
     DEFAULT_CONFIG_FILENAME
 } from '../../../src/generator/config/config-manager';
 
@@ -32,6 +33,26 @@ describe('Config Manager', () => {
             expect(normalizeMoodleVersion('v5.2.x')).toBe('5.2');
             expect(normalizeMoodleVersion('5.2.1')).toBe('5.2');
             expect(normalizeMoodleVersion('5.2')).toBe('5.2');
+        });
+    });
+
+    describe('isMoodleVersionSupported', () => {
+        it('should return true for Moodle versions >= 2.0', () => {
+            expect(isMoodleVersionSupported('2.0')).toBe(true);
+            expect(isMoodleVersionSupported('2.1')).toBe(true);
+            expect(isMoodleVersionSupported('3.11')).toBe(true);
+            expect(isMoodleVersionSupported('4.5')).toBe(true);
+            expect(isMoodleVersionSupported('5.0')).toBe(true);
+            expect(isMoodleVersionSupported('v4.5')).toBe(true);
+        });
+
+        it('should return false for Moodle versions < 2.0', () => {
+            expect(isMoodleVersionSupported('1.9')).toBe(false);
+            expect(isMoodleVersionSupported('1.9.19')).toBe(false);
+            expect(isMoodleVersionSupported('1.8')).toBe(false);
+            expect(isMoodleVersionSupported('1.0')).toBe(false);
+            expect(isMoodleVersionSupported('0.9')).toBe(false);
+            expect(isMoodleVersionSupported('v1.9')).toBe(false);
         });
     });
 
@@ -124,6 +145,19 @@ describe('Config Manager', () => {
 
             await expect(loadOrCreateConfig(explicitMissing)).rejects.toMatchObject({
                 code: 'ERR_CONFIG_FILE_NOT_FOUND'
+            });
+        });
+
+        it('should throw ERR_MOODLE_VERSION_UNSUPPORTED when configured version is < 2.0', async () => {
+            const configFilePath = path.join(tempDir, DEFAULT_CONFIG_FILENAME);
+            const invalidVersionConfig = {
+                version: '1.9',
+                webservices: ['*']
+            };
+            await fs.writeFile(configFilePath, JSON.stringify(invalidVersionConfig, null, 2), 'utf-8');
+
+            await expect(loadOrCreateConfig(configFilePath)).rejects.toMatchObject({
+                code: 'ERR_MOODLE_VERSION_UNSUPPORTED'
             });
         });
     });
