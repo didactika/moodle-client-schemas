@@ -14,8 +14,8 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "moodle-client-schemas": "./dist/cli.js",
-    "moodle-schemas": "./dist/cli.js"
+    "moodle-client-schemas": "dist/cli.js",
+    "moodle-schemas": "dist/cli.js"
   },
   "files": [
     "dist",
