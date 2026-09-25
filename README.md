@@ -25,6 +25,7 @@
   - [Pipeline Overview](#pipeline-overview)
   - [Sandboxed PHP Adapter](#sandboxed-php-adapter)
 - [Service Filtering](#service-filtering)
+- [Schema Generation Error Codes](#schema-generation-error-codes)
 - [Development & Verification](#development--verification)
 - [Contributors](#contributors)
 - [License](#license)
@@ -477,6 +478,60 @@ await extractWebservice({
     ]
 });
 ```
+
+---
+
+## Schema Generation Error Codes
+
+When generating schemas (via `runGeneratorWithProgress`, `runGeneratorPipeline`, or CLI), all failures are captured and presented as structured diagnostics without stack traces:
+
+```text
+[moodle-client] ERROR: <Title> (<CODE>)
+Details: <Clear description of the issue>
+Action:  <Exact action required to resolve it>
+```
+
+### PHP CLI Environment
+
+| Code | Title | Description & Recommended Action |
+|---|---|---|
+| `ERR_PHP_NOT_FOUND` | PHP CLI Not Found | The `php` executable was not found in system `PATH`. Install PHP 7.4 or higher and ensure `php` is in your `PATH`. |
+| `ERR_PHP_VERSION_UNSUPPORTED` | Unsupported PHP Version | Detected PHP version is lower than 7.4. Moodle schema extraction requires PHP 7.4+. Upgrade your PHP CLI installation. |
+
+### Remote Archive Download & Network
+
+| Code | Title | Description & Recommended Action |
+|---|---|---|
+| `ERR_NETWORK_DISCONNECTED` | Network Disconnected | Failed to reach GitHub to download Moodle repository archive (DNS resolution failed, connection timeout, or offline). Check your internet connection or use a local codebase via `moodlePath`. |
+| `ERR_ARCHIVE_EXTRACTION_FAILED` | Archive Extraction Failed | Downloaded tarball archive could not be unpacked (corrupted stream or extraction failure). Check network stability and disk space. |
+| `ERR_GIT_NOT_FOUND` | Git Executable Not Found | Fast tarball download failed and Git is not installed in system `PATH` to perform fallback shallow clone. Install Git or restore network connectivity. |
+
+### Local Moodle Codebase Validation
+
+| Code | Title | Description & Recommended Action |
+|---|---|---|
+| `ERR_MOODLE_PATH_NOT_FOUND` | Moodle Path Not Found | The path specified in `moodlePath` does not exist on disk. Check that the directory path is spelled correctly. |
+| `ERR_MOODLE_PATH_NOT_ROOT` | Invalid Moodle Root Directory | The directory specified in `moodlePath` has no `version.php` at its root (nor under `public/`). Set `moodlePath` to the direct root of the Moodle installation. |
+| `ERR_MOODLE_PATH_MULTIPLE_INSTANCES` | Multiple Moodle Instances Detected | The directory contains multiple Moodle installations in subdirectories. Specify the exact subdirectory of the desired instance in `moodlePath`. |
+| `ERR_MOODLE_PATH_PERMISSION_DENIED` | Moodle Path Permission Denied | Permission denied when reading the local Moodle codebase. Check read permissions for the current user. |
+| `ERR_NO_SERVICES_FOUND` | No Web Services Found | Scanned codebase has 0 `db/services.php` files. Verify that the Moodle installation is complete. |
+
+### Web Service Resolution & Introspection
+
+| Code | Title | Description & Recommended Action |
+|---|---|---|
+| `ERR_SERVICE_NOT_FOUND` | Web Service Not Found | A pattern specified in the `webservices` filter array did not match any declared web service in `db/services.php`. Check service names or wildcards in `moodle-client.config.json`. |
+| `ERR_CLASS_NOT_FOUND` | Web Service Class Not Found | The PHP class declaring the external function could not be resolved on disk. Verify that the plugin containing the class is installed. |
+| `ERR_INTROSPECTION_FAILED` | Web Service Introspection Failed | PHP reflection threw a fatal error or uncaught exception while executing `_parameters()` or `_returns()`. Check PHP syntax and runtime dependencies in the external class. |
+
+### Configuration & Output Filesystem
+
+| Code | Title | Description & Recommended Action |
+|---|---|---|
+| `ERR_CONFIG_INVALID_JSON` | Invalid Configuration File | `moodle-client.config.json` contains malformed JSON. Fix syntax errors or remove the file to regenerate default configuration. |
+| `ERR_CONFIG_MISSING_OUTDIR_LOCAL` | Missing outDir in Local Mode | When `moodlePath` is defined, `outDir` is mandatory to avoid overwriting internal schemas. Add `"outDir": "./moodle-schemas"` to `moodle-client.config.json`. |
+| `ERR_CONFIG_FILE_NOT_FOUND` | Configuration File Not Found | The file specified via `--config <path>` does not exist on disk. Check the file path or omit `--config`. |
+| `ERR_WRITE_PERMISSION_DENIED` | Write Permission Denied | Permission denied when writing generated schemas to destination directory. Check filesystem write permissions. |
 
 ---
 

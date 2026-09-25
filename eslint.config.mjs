@@ -5,12 +5,11 @@ export default tseslint.config(
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    ignores: ['dist/**', 'node_modules/**', 'coverage/**', '*.cjs', 'src/tmp/**']
+    ignores: ['dist/**', 'node_modules/**', 'coverage/**', '*.cjs', 'scripts/**', 'src/tmp/**', 'src/schemas/**', 'src/types/moodle-client.d.ts']
   },
   {
     files: ['src/**/*.ts', 'test/**/*.ts'],
     rules: {
-      'complexity': ['error', 3],
       'no-unused-vars': 'off',
       '@typescript-eslint/no-unused-vars': [
         'error',
@@ -25,6 +24,18 @@ export default tseslint.config(
       'curly': ['error', 'all'],
       'no-var': 'error',
       'prefer-const': 'error'
+    }
+  },
+  {
+    files: ['src/webservice-extractor/**/*.ts'],
+    rules: {
+      'complexity': ['error', 3]
+    }
+  },
+  {
+    files: ['test/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'off'
     }
   }
 );

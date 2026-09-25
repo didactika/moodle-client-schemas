@@ -29,4 +29,14 @@ export { loadOrCreateConfig, normalizeMoodleVersion } from './generator/config/c
 export type { MoodleClientConfig, RawMoodleClientConfig } from './generator/interfaces/config.interfaces';
 export type { GeneratedServiceMetadata } from './generator/interfaces/generator.interfaces';
 
+// Generator errors
+export {
+    MoodleGeneratorError,
+    MoodleGeneratorErrorCode,
+    MoodleGeneratorErrorOptions,
+    formatError,
+    mapExtractionErrorToGeneratorError
+} from './generator/errors/generator-error';
+
 // Preloaded schemas are re-exported via declaration in dist/index.d.ts
+

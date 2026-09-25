@@ -6,6 +6,39 @@ import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 import * as tar from 'tar';
 import { normalizeMoodleVersion } from '../config/config-manager';
+import { MoodleGeneratorError } from '../errors/generator-error';
+
+function isGitMissing(err: unknown): boolean {
+    if (!err) {
+        return false;
+    }
+    const msg = String(err);
+    const code = (err as Record<string, unknown>).code;
+    return (
+        code === 'ENOENT' ||
+        /git:\s*(command\s*)?not found/i.test(msg) ||
+        /spawn git ENOENT/i.test(msg) ||
+        /not recognized as an internal or external command/i.test(msg)
+    );
+}
+
+function isNetworkError(err: unknown): boolean {
+    if (!err) {
+        return false;
+    }
+    const msg = String(err);
+    const errObj = err as Record<string, unknown>;
+    const causeMsg = errObj.cause ? String(errObj.cause) : '';
+    const fullMsg = `${msg} ${causeMsg}`;
+    return (
+        /ENOTFOUND|EAI_AGAIN|ECONNREFUSED|ECONNRESET|ETIMEDOUT/i.test(fullMsg) ||
+        /fetch failed/i.test(fullMsg) ||
+        /network\s*(error|is unreachable)/i.test(fullMsg) ||
+        /Could not resolve host/i.test(fullMsg) ||
+        /fatal:\s*unable to access/i.test(fullMsg) ||
+        /Failed to connect/i.test(fullMsg)
+    );
+}
 
 function runCommand(command: string): Promise<{ stdout: string; stderr: string }> {
     return new Promise((resolve, reject) => {
@@ -180,10 +213,44 @@ async function shallowGitClone(version: string, targetPath: string): Promise<str
  * @returns {Promise<string>} The path to the repository directory
  */
 export async function cloneMoodleVersion(version: string, targetPath: string): Promise<string> {
+    let tarballError: unknown;
     try {
         return await downloadMoodleTarball(version, targetPath);
-    } catch {
+    } catch (err) {
+        tarballError = err;
+    }
+
+    try {
         return await shallowGitClone(version, targetPath);
+    } catch (gitErr: unknown) {
+        if (isGitMissing(gitErr)) {
+            throw new MoodleGeneratorError({
+                code: 'ERR_GIT_NOT_FOUND',
+                title: 'Git Executable Not Found',
+                details: 'Tarball download failed and Git is not available in system PATH to perform fallback clone.',
+                action: 'Install Git or restore your internet connection to allow direct archive download.',
+                cause: gitErr
+            });
+        }
+        if (isNetworkError(gitErr) || isNetworkError(tarballError)) {
+            throw new MoodleGeneratorError({
+                code: 'ERR_NETWORK_DISCONNECTED',
+                title: 'Network Disconnected',
+                details: 'Failed to reach GitHub to download Moodle repository archive (DNS resolution failed or connection refused).',
+                action: "Check your internet connection, proxy settings, or configure a local Moodle instance via 'moodlePath' in moodle-client.config.json.",
+                cause: gitErr
+            });
+        }
+        if (tarballError instanceof MoodleGeneratorError) {
+            throw tarballError;
+        }
+        throw new MoodleGeneratorError({
+            code: 'ERR_ARCHIVE_EXTRACTION_FAILED',
+            title: 'Archive Extraction Failed',
+            details: `Failed to extract downloaded Moodle tarball archive: ${(tarballError as Error)?.message ?? String(tarballError)}.`,
+            action: 'Verify your disk space and network integrity, or try re-running the command.',
+            cause: tarballError
+        });
     }
 }
 

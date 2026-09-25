@@ -16,6 +16,10 @@ import {
     syncSchemas,
     resolveInternalPackageSchemasDir
 } from './syncer/schema-syncer';
+import {
+    MoodleGeneratorError,
+    mapExtractionErrorToGeneratorError
+} from './errors/generator-error';
 
 /**
  * Generates all individual `.webservice-client.ts` files and the central `index.ts` barrel.
@@ -29,38 +33,52 @@ export async function generateWebserviceFiles(
     schemas: WebServiceSchema[],
     outDir: string
 ): Promise<void> {
-    // 1. Wipe and re-create outDir to ensure no orphaned files remain
-    await fs.rm(outDir, { recursive: true, force: true });
-    await fs.mkdir(outDir, { recursive: true });
+    try {
+        // 1. Wipe and re-create outDir to ensure no orphaned files remain
+        await fs.rm(outDir, { recursive: true, force: true });
+        await fs.mkdir(outDir, { recursive: true });
 
-    const metadataList: GeneratedServiceMetadata[] = [];
+        const metadataList: GeneratedServiceMetadata[] = [];
 
-    // 2. Emit each webservice in its hierarchical folder
-    for (const schema of schemas) {
-        const relFilePath = resolveWebserviceFilePath(schema.name);
-        const absoluteFilePath = path.join(outDir, relFilePath);
+        // 2. Emit each webservice in its hierarchical folder
+        for (const schema of schemas) {
+            const relFilePath = resolveWebserviceFilePath(schema.name);
+            const absoluteFilePath = path.join(outDir, relFilePath);
 
-        const parentDir = path.dirname(absoluteFilePath);
-        await fs.mkdir(parentDir, { recursive: true });
+            const parentDir = path.dirname(absoluteFilePath);
+            await fs.mkdir(parentDir, { recursive: true });
 
-        const code = emitWebserviceCode(schema);
-        await fs.writeFile(absoluteFilePath, code, 'utf-8');
+            const code = emitWebserviceCode(schema);
+            await fs.writeFile(absoluteFilePath, code, 'utf-8');
 
-        const relativeImportPath = `./${relFilePath.replace(/\.d\.ts$/, '').replace(/\.ts$/, '')}`;
-        metadataList.push({
-            name: schema.name,
-            relativeImportPath,
-            hasRequiredParams: hasRequiredParameters(schema),
-            description: schema.description,
-            paramsDescription: schema.parameters?.description,
-            returnsDescription: schema.returns?.description
-        });
+            const relativeImportPath = `./${relFilePath.replace(/\.d\.ts$/, '').replace(/\.ts$/, '')}`;
+            metadataList.push({
+                name: schema.name,
+                relativeImportPath,
+                hasRequiredParams: hasRequiredParameters(schema),
+                description: schema.description,
+                paramsDescription: schema.parameters?.description,
+                returnsDescription: schema.returns?.description
+            });
+        }
+
+        // 3. Emit central index.d.ts and index.ts barrel
+        const barrelCode = emitBarrelCode(metadataList);
+        await fs.writeFile(path.join(outDir, 'index.d.ts'), barrelCode, 'utf-8');
+        await fs.writeFile(path.join(outDir, 'index.ts'), barrelCode, 'utf-8');
+    } catch (err: unknown) {
+        const errCode = (err as Record<string, unknown>).code;
+        if (errCode === 'EACCES' || errCode === 'EPERM') {
+            throw new MoodleGeneratorError({
+                code: 'ERR_WRITE_PERMISSION_DENIED',
+                title: 'Write Permission Denied',
+                details: `Permission denied when writing schemas to destination directory: '${outDir}'.`,
+                action: 'Ensure the current user has write permissions to create and modify files in the destination directory.',
+                cause: err
+            });
+        }
+        throw err;
     }
-
-    // 3. Emit central index.d.ts and index.ts barrel
-    const barrelCode = emitBarrelCode(metadataList);
-    await fs.writeFile(path.join(outDir, 'index.d.ts'), barrelCode, 'utf-8');
-    await fs.writeFile(path.join(outDir, 'index.ts'), barrelCode, 'utf-8');
 }
 
 /**
@@ -145,13 +163,11 @@ export async function runGeneratorPipeline(
                 );
             }
             if (result.schemas.length === 0) {
-                throw new Error(
-                    `Failed to extract web services: ${result.errors[0]?.message ?? 'Unknown extraction error'}`
-                );
+                throw mapExtractionErrorToGeneratorError(result.errors[0], targetMoodlePath);
             }
         }
 
-        await generateWebserviceFiles(result.schemas as any, targetOutDir);
+        await generateWebserviceFiles(result.schemas as WebServiceSchema[], targetOutDir);
 
         // Synchronize with internal package
         const { syncedCount } = await syncSchemas(targetOutDir, configDir);
