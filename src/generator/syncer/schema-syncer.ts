@@ -3,8 +3,8 @@ import { existsSync, readFileSync } from 'fs';
 import path from 'path';
 
 export const SUPPORTED_PACKAGE_NAMES = [
-    '@didactika/moodle-client',
-    '@didactika/moodle-client-schemas'
+    '@didactika/moodle-client-schemas',
+    '@didactika/moodle-client'
 ];
 
 /**
