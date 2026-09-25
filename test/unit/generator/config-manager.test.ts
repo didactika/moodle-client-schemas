@@ -109,5 +109,22 @@ describe('Config Manager', () => {
                 /'outDir' is required in 'moodle-client.config.json' when 'moodlePath' is defined/
             );
         });
+
+        it('should throw ERR_CONFIG_INVALID_JSON when configuration file contains malformed JSON', async () => {
+            const configFilePath = path.join(tempDir, DEFAULT_CONFIG_FILENAME);
+            await fs.writeFile(configFilePath, '{ invalid json content', 'utf-8');
+
+            await expect(loadOrCreateConfig(configFilePath)).rejects.toMatchObject({
+                code: 'ERR_CONFIG_INVALID_JSON'
+            });
+        });
+
+        it('should throw ERR_CONFIG_FILE_NOT_FOUND when explicit config path does not exist', async () => {
+            const explicitMissing = path.join(tempDir, 'custom-missing.json');
+
+            await expect(loadOrCreateConfig(explicitMissing)).rejects.toMatchObject({
+                code: 'ERR_CONFIG_FILE_NOT_FOUND'
+            });
+        });
     });
 });

@@ -1,4 +1,5 @@
 import { runGeneratorPipeline } from '../generator-pipeline';
+import { formatError } from '../errors/generator-error';
 
 function calculateProgress(
     startTime: number,
@@ -46,10 +47,10 @@ function renderProgressTick(startTime: number, barWidth: number): void {
 function renderCompletion(startTime: number, barWidth: number, isTTY: boolean): void {
     const elapsedSec = ((Date.now() - startTime) / 1000).toFixed(1);
     if (isTTY) {
-        process.stdout.write(`\x1b[1A\r\x1b[K✔ Moodle client ready (${elapsedSec}s)\n`);
+        process.stdout.write(`\x1b[1A\r\x1b[K[moodle-client] Moodle client ready (${elapsedSec}s)\n`);
         process.stdout.write(`\r  [${'■'.repeat(barWidth)}] 100%\n\n`);
     } else {
-        process.stdout.write(`✔ Moodle client ready (${elapsedSec}s)\n\n`);
+        process.stdout.write(`[moodle-client] Moodle client ready (${elapsedSec}s)\n\n`);
     }
     printUsageInstructions();
 }
@@ -75,13 +76,12 @@ function stopProgressBar(startTime: number, timer: NodeJS.Timeout | null, barWid
     renderCompletion(startTime, barWidth, Boolean(process.stdout.isTTY));
 }
 
-function reportProgressError(timer: NodeJS.Timeout | null, error: unknown): void {
+export function reportProgressError(timer: NodeJS.Timeout | null, error: unknown): void {
     if (timer) {
         clearInterval(timer);
     }
     process.stdout.write('\n\n');
-    const message = error instanceof Error ? error.message : String(error);
-    console.error(`✖ Failed to generate Moodle client: ${message}`);
+    console.error(formatError(error));
 }
 
 /**

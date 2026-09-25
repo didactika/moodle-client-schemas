@@ -208,6 +208,41 @@ describe('Single Version Downloader', () => {
             expect(commandRun).toContain('--branch v4.5.0');
             expect(commandRun).toContain('https://github.com/moodle/moodle.git');
         });
+
+        it('should throw ERR_GIT_NOT_FOUND when tarball fails and git is not installed', async () => {
+            jest.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('Network error'));
+            jest.spyOn(child_process, 'exec').mockImplementation((...args: unknown[]) => {
+                const callback = args.find((arg): arg is ExecCallback => typeof arg === 'function');
+                if (callback) {
+                    const err = new Error('git: command not found') as any;
+                    err.code = 'ENOENT';
+                    callback(err, '', 'git: command not found');
+                }
+                return {} as child_process.ChildProcess;
+            });
+
+            const targetDir = path.join(tempDir, 'missing-git-moodle');
+            await expect(cloneMoodleVersion('4.5', targetDir)).rejects.toMatchObject({
+                code: 'ERR_GIT_NOT_FOUND'
+            });
+        });
+
+        it('should throw ERR_NETWORK_DISCONNECTED when both tarball and git clone fail due to network error', async () => {
+            jest.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('fetch failed'));
+            jest.spyOn(child_process, 'exec').mockImplementation((...args: unknown[]) => {
+                const callback = args.find((arg): arg is ExecCallback => typeof arg === 'function');
+                if (callback) {
+                    const err = new Error('fatal: unable to access: Could not resolve host: github.com') as any;
+                    callback(err, '', 'fatal: unable to access');
+                }
+                return {} as child_process.ChildProcess;
+            });
+
+            const targetDir = path.join(tempDir, 'disconnected-moodle');
+            await expect(cloneMoodleVersion('4.5', targetDir)).rejects.toMatchObject({
+                code: 'ERR_NETWORK_DISCONNECTED'
+            });
+        });
     });
 
     it('should safely clean up downloaded directory from disk', async () => {

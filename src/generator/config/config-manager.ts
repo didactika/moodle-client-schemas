@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { MoodleClientConfig, RawMoodleClientConfig } from '../interfaces/config.interfaces';
+import { MoodleGeneratorError } from '../errors/generator-error';
 
 export { MoodleClientConfig, RawMoodleClientConfig };
 
@@ -31,26 +32,42 @@ export function normalizeMoodleVersion(version: string): string {
  *
  * @param {string} [configPath] - Optional explicit path to configuration file
  * @param {string} [defaultVersion=FALLBACK_MOODLE_VERSION] - Fallback version if creating default
+ * @param {boolean} [isExplicitConfig] - Whether configPath was explicitly specified by the user
  * @returns {Promise<MoodleClientConfig>} Loaded or created configuration
  */
 export async function loadOrCreateConfig(
-    configPath: string = path.resolve(process.cwd(), DEFAULT_CONFIG_FILENAME),
-    defaultVersion: string = FALLBACK_MOODLE_VERSION
+    configPath?: string,
+    defaultVersion: string = FALLBACK_MOODLE_VERSION,
+    isExplicitConfig?: boolean
 ): Promise<MoodleClientConfig> {
+    const isExplicit = isExplicitConfig ?? (configPath !== undefined && path.basename(configPath) !== DEFAULT_CONFIG_FILENAME);
+    const resolvedConfigPath = configPath
+        ? path.resolve(configPath)
+        : path.resolve(process.cwd(), DEFAULT_CONFIG_FILENAME);
+
     const fileExists = await fs
-        .access(configPath)
+        .access(resolvedConfigPath)
         .then(() => true)
         .catch(() => false);
 
     if (!fileExists) {
+        if (isExplicit) {
+            throw new MoodleGeneratorError({
+                code: 'ERR_CONFIG_FILE_NOT_FOUND',
+                title: 'Configuration File Not Found',
+                details: `Explicit configuration file does not exist on disk: '${resolvedConfigPath}'.`,
+                action: 'Check the path passed to --config or omit the option to use the default moodle-client.config.json.'
+            });
+        }
+
         const defaultConfig: RawMoodleClientConfig = {
             version: normalizeMoodleVersion(defaultVersion),
             webservices: ['*']
         };
 
-        const parentDir = path.dirname(configPath);
+        const parentDir = path.dirname(resolvedConfigPath);
         await fs.mkdir(parentDir, { recursive: true });
-        await fs.writeFile(configPath, JSON.stringify(defaultConfig, null, 2), 'utf-8');
+        await fs.writeFile(resolvedConfigPath, JSON.stringify(defaultConfig, null, 2), 'utf-8');
 
         return {
             version: defaultConfig.version!,
@@ -59,8 +76,20 @@ export async function loadOrCreateConfig(
         };
     }
 
-    const rawContent = await fs.readFile(configPath, 'utf-8');
-    const parsed: RawMoodleClientConfig = JSON.parse(rawContent);
+    const rawContent = await fs.readFile(resolvedConfigPath, 'utf-8');
+    let parsed: RawMoodleClientConfig;
+    try {
+        parsed = JSON.parse(rawContent);
+    } catch (parseErr: unknown) {
+        const errorMsg = parseErr instanceof Error ? parseErr.message : String(parseErr);
+        throw new MoodleGeneratorError({
+            code: 'ERR_CONFIG_INVALID_JSON',
+            title: 'Invalid Configuration File',
+            details: `The configuration file at '${resolvedConfigPath}' contains invalid JSON: ${errorMsg}.`,
+            action: `Fix syntax errors in ${path.basename(resolvedConfigPath)} or delete the file to regenerate a valid default configuration.`,
+            cause: parseErr
+        });
+    }
 
     const version = normalizeMoodleVersion(parsed.version || defaultVersion);
     const webservices = parsed.webservices && parsed.webservices.length > 0 ? parsed.webservices : ['*'];
@@ -69,21 +98,12 @@ export async function loadOrCreateConfig(
     const outDir = parsed.outDir && parsed.outDir.trim().length > 0 ? parsed.outDir.trim() : undefined;
 
     if (moodlePath && !outDir) {
-        throw new Error(
-            `[moodle-client] Configuration Error: 'outDir' is required in '${path.basename(configPath)}' when 'moodlePath' is defined.\n\n` +
-            `Configuration file: ${configPath}\n` +
-            `Missing property: "outDir"\n\n` +
-            `Example of required configuration in '${path.basename(configPath)}':\n` +
-            JSON.stringify(
-                {
-                    moodlePath: moodlePath,
-                    outDir: './moodle-schemas',
-                    webservices: webservices
-                },
-                null,
-                2
-            )
-        );
+        throw new MoodleGeneratorError({
+            code: 'ERR_CONFIG_MISSING_OUTDIR_LOCAL',
+            title: 'Missing outDir in Local Mode',
+            details: `'outDir' is required in '${path.basename(resolvedConfigPath)}' when 'moodlePath' is defined.`,
+            action: `Add "outDir": "./moodle-schemas" (or your preferred output directory) to ${path.basename(resolvedConfigPath)}.`
+        });
     }
 
     return {

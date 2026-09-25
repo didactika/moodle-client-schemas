@@ -138,7 +138,7 @@ export function emitWebserviceCode(schema: WebServiceSchema): string {
     // 2. Emit Returns Type / Interface
     const returnsJsDoc = formatJsDoc(schema.returns?.description);
     let returnsDeclaration = '';
-    if (schema.returns && (schema.returns.kind === 'object' || (schema.returns as any).keys)) {
+    if (schema.returns && (schema.returns.kind === 'object' || 'keys' in schema.returns)) {
         const objSchema = schema.returns as WebServiceObjectSchema;
         const keys = objSchema.keys || {};
         const entries = Object.entries(keys) as [string, WebServiceReturnSchema][];
