@@ -24,6 +24,7 @@ export type { HttpMethod, MoodleResponse } from './types/http.types';
 
 // Generator pipeline & interfaces
 export { runGeneratorPipeline, generateWebserviceFiles } from './generator/generator-pipeline';
+export { runGeneratorWithProgress, buildBox } from './generator/ui/progress-bar';
 export { loadOrCreateConfig, normalizeMoodleVersion } from './generator/config/config-manager';
 export type { MoodleClientConfig, RawMoodleClientConfig } from './generator/interfaces/config.interfaces';
 export type { GeneratedServiceMetadata } from './generator/interfaces/generator.interfaces';

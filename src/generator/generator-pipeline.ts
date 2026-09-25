@@ -69,11 +69,28 @@ export async function generateWebserviceFiles(
  * 2. If outDir is specified and schemas already exist, skips extraction and synchronizes with package.
  * 3. Otherwise extracts webservice AST schemas via headless PHP adapter.
  * 4. Generates files and synchronizes them into internal package.
+ */
+export interface RunGeneratorPipelineOptions {
+    silent?: boolean;
+}
+
+function logInfo(message: string, silent?: boolean): void {
+    if (!silent) {
+        console.log(message);
+    }
+}
+
+/**
+ * Executes the complete web service generation and synchronization pipeline.
  *
  * @param {string} [configPath] - Optional path to config file
+ * @param {RunGeneratorPipelineOptions} [options] - Pipeline options
  * @returns {Promise<void>}
  */
-export async function runGeneratorPipeline(configPath?: string): Promise<void> {
+export async function runGeneratorPipeline(
+    configPath?: string,
+    options?: RunGeneratorPipelineOptions
+): Promise<void> {
     const resolvedConfigPath = configPath
         ? path.resolve(configPath)
         : path.resolve(process.cwd(), DEFAULT_CONFIG_FILENAME);
@@ -86,13 +103,15 @@ export async function runGeneratorPipeline(configPath?: string): Promise<void> {
         const existsWithSchemas = await hasExistingSchemas(resolvedOutDir);
 
         if (existsWithSchemas) {
-            console.log(`[moodle-client] Schemas already exist in '${config.outDir}'. Generation skipped.`);
+            logInfo(`[moodle-client] Schemas already exist in '${config.outDir}'. Generation skipped.`, options?.silent);
             const { syncedCount } = await syncSchemas(resolvedOutDir, configDir);
-            console.log(
-                `[moodle-client] Synchronized ${syncedCount} schemas from '${config.outDir}' to internal '@didactika/moodle-client' package.`
+            logInfo(
+                `[moodle-client] Synchronized ${syncedCount} schemas from '${config.outDir}' to internal '@didactika/moodle-client' package.`,
+                options?.silent
             );
-            console.log(
-                `[moodle-client] You can import types and clients directly: import { MoodleClient, MoodleResponse, ... } from "@didactika/moodle-client";`
+            logInfo(
+                `[moodle-client] You can import types and clients directly: import { MoodleClient, MoodleResponse, ... } from "@didactika/moodle-client";`,
+                options?.silent
             );
             return;
         }
@@ -138,19 +157,23 @@ export async function runGeneratorPipeline(configPath?: string): Promise<void> {
         const { syncedCount } = await syncSchemas(targetOutDir, configDir);
 
         if (config.outDir) {
-            console.log(
-                `[moodle-client] Successfully generated ${result.schemas.length} webservices into '${config.outDir}'.`
+            logInfo(
+                `[moodle-client] Successfully generated ${result.schemas.length} webservices into '${config.outDir}'.`,
+                options?.silent
             );
-            console.log(
-                `[moodle-client] Synchronized ${syncedCount} schemas from '${config.outDir}' to internal '@didactika/moodle-client' package.`
+            logInfo(
+                `[moodle-client] Synchronized ${syncedCount} schemas from '${config.outDir}' to internal '@didactika/moodle-client' package.`,
+                options?.silent
             );
         } else {
-            console.log(
-                `[moodle-client] Successfully generated ${result.schemas.length} webservices into internal '@didactika/moodle-client' package.`
+            logInfo(
+                `[moodle-client] Successfully generated ${result.schemas.length} webservices into internal '@didactika/moodle-client' package.`,
+                options?.silent
             );
         }
-        console.log(
-            `[moodle-client] You can import types and clients directly: import { MoodleClient, MoodleResponse, ... } from "@didactika/moodle-client";`
+        logInfo(
+            `[moodle-client] You can import types and clients directly: import { MoodleClient, MoodleResponse, ... } from "@didactika/moodle-client";`,
+            options?.silent
         );
     } finally {
         if (shouldCleanup && targetMoodlePath) {
