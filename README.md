@@ -531,6 +531,7 @@ Action:  <Exact action required to resolve it>
 | `ERR_CONFIG_INVALID_JSON` | Invalid Configuration File | `moodle-client.config.json` contains malformed JSON. Fix syntax errors or remove the file to regenerate default configuration. |
 | `ERR_CONFIG_MISSING_OUTDIR_LOCAL` | Missing outDir in Local Mode | When `moodlePath` is defined, `outDir` is mandatory to avoid overwriting internal schemas. Add `"outDir": "./moodle-schemas"` to `moodle-client.config.json`. |
 | `ERR_CONFIG_FILE_NOT_FOUND` | Configuration File Not Found | The file specified via `--config <path>` does not exist on disk. Check the file path or omit `--config`. |
+| `ERR_MOODLE_VERSION_UNSUPPORTED` | Unsupported Moodle Version | Configured Moodle version is lower than 2.0. Web services schema generation requires Moodle 2.0 or higher. Set `"version"` to a supported version (e.g. `"4.5"`). |
 | `ERR_WRITE_PERMISSION_DENIED` | Write Permission Denied | Permission denied when writing generated schemas to destination directory. Check filesystem write permissions. |
 
 ---
