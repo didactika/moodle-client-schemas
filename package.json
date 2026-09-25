@@ -61,12 +61,14 @@
   },
   "dependencies": {
     "p-limit": "^7.3.1",
-    "php-parser": "^3.7.0"
+    "php-parser": "^3.7.0",
+    "tar": "^7.5.22"
   },
   "devDependencies": {
     "@eslint/js": "^9.20.0",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.13.4",
+    "@types/tar": "^6.1.13",
     "@typescript-eslint/eslint-plugin": "^8.24.0",
     "@typescript-eslint/parser": "^8.24.0",
     "eslint": "^9.20.1",
