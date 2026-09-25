@@ -110,6 +110,34 @@ describe('Schema Syncer Utility', () => {
         expect(updatedDts).toContain('export * from "./schemas/index"');
     });
 
+    it('syncSchemas should wipe stale schemas from dist/schemas on subsequent sync', async () => {
+        const mockConsumer = path.join(tempDir, 'consumer-stale');
+        const mockPkgDir = path.join(mockConsumer, 'node_modules/@didactika/moodle-client');
+        const distSchemas = path.join(mockPkgDir, 'dist/schemas');
+        await fs.mkdir(distSchemas, { recursive: true });
+        await fs.writeFile(
+            path.join(mockPkgDir, 'package.json'),
+            JSON.stringify({ name: '@didactika/moodle-client', version: '2.1.0' }),
+            'utf-8'
+        );
+        // Create an old stale schema that should be removed
+        const staleFile = path.join(distSchemas, 'old_stale.webservice-client.d.ts');
+        await fs.writeFile(staleFile, 'export interface OldStale {}', 'utf-8');
+
+        // New source schemas with only one file
+        const sourceDir = path.join(mockConsumer, 'my-new-schemas');
+        await fs.mkdir(sourceDir, { recursive: true });
+        await fs.writeFile(path.join(sourceDir, 'index.ts'), "export * from './new';", 'utf-8');
+        await fs.writeFile(path.join(sourceDir, 'new.webservice-client.ts'), 'export interface New {}', 'utf-8');
+
+        await syncSchemas(sourceDir, mockConsumer);
+
+        // Verify stale file is gone
+        expect(await fs.access(staleFile).then(() => true).catch(() => false)).toBe(false);
+        // Verify new files exist
+        expect(await fs.access(path.join(distSchemas, 'new.webservice-client.d.ts')).then(() => true).catch(() => false)).toBe(true);
+    });
+
     it('resolveInternalPackageSchemasDir should return dist/schemas when dist directory exists', () => {
         const mockConsumer = path.join(tempDir, 'consumer');
         const resolved = resolveInternalPackageSchemasDir(mockConsumer);

@@ -3,22 +3,25 @@ import { existsSync, readFileSync } from 'fs';
 import path from 'path';
 
 export const SUPPORTED_PACKAGE_NAMES = [
-    '@didactika/moodle-client-schemas',
-    '@didactika/moodle-client'
+    '@didactika/moodle-client',
+    '@didactika/moodle-client-schemas'
 ];
 
 /**
- * Finds the root directory of the installed @didactika/moodle-client-schemas or @didactika/moodle-client package.
+ * Finds all root directories of installed @didactika/moodle-client and @didactika/moodle-client-schemas packages.
  *
  * @param {string} baseDir - Directory to start search from (where config is located)
- * @returns {string | null} Package directory or null if not found
+ * @returns {string[]} Array of unique package directories found
  */
-export function findPackageDir(baseDir: string): string | null {
+export function findAllPackageDirs(baseDir: string): string[] {
+    const foundDirs = new Set<string>();
+
     for (const pkgName of SUPPORTED_PACKAGE_NAMES) {
         // 1. Direct node_modules in baseDir
         const directBaseCand = path.resolve(baseDir, `node_modules/${pkgName}`);
         if (existsSync(path.join(directBaseCand, 'package.json'))) {
-            return directBaseCand;
+            foundDirs.add(directBaseCand);
+            continue;
         }
 
         // 2. Standard require.resolve relative to baseDir
@@ -26,7 +29,8 @@ export function findPackageDir(baseDir: string): string | null {
             const pkgJsonPath = require.resolve(`${pkgName}/package.json`, {
                 paths: [baseDir]
             });
-            return path.dirname(pkgJsonPath);
+            foundDirs.add(path.dirname(pkgJsonPath));
+            continue;
         } catch {
             // Ignored, proceed
         }
@@ -34,31 +38,47 @@ export function findPackageDir(baseDir: string): string | null {
         // 3. Direct node_modules in process.cwd()
         const directCwdCand = path.resolve(process.cwd(), `node_modules/${pkgName}`);
         if (existsSync(path.join(directCwdCand, 'package.json'))) {
-            return directCwdCand;
+            foundDirs.add(directCwdCand);
+            continue;
         }
     }
 
-    // 4. Ascend upwards to check if running from inside the package directory itself
-    const startDirs = [baseDir, process.cwd()];
-    for (const start of startDirs) {
-        let current = path.resolve(start);
-        while (current !== path.dirname(current)) {
-            const candidatePkg = path.join(current, 'package.json');
-            if (existsSync(candidatePkg)) {
-                try {
-                    const content = JSON.parse(readFileSync(candidatePkg, 'utf-8'));
-                    if (SUPPORTED_PACKAGE_NAMES.includes(content.name)) {
-                        return current;
+    if (foundDirs.size === 0) {
+        // 4. Ascend upwards to check if running from inside the package directory itself
+        const startDirs = [baseDir, process.cwd()];
+        for (const start of startDirs) {
+            let current = path.resolve(start);
+            while (current !== path.dirname(current)) {
+                const candidatePkg = path.join(current, 'package.json');
+                if (existsSync(candidatePkg)) {
+                    try {
+                        const content = JSON.parse(readFileSync(candidatePkg, 'utf-8'));
+                        if (SUPPORTED_PACKAGE_NAMES.includes(content.name)) {
+                            foundDirs.add(current);
+                            break;
+                        }
+                    } catch {
+                        // Ignore JSON parse error
                     }
-                } catch {
-                    // Ignore JSON parse error
                 }
+                current = path.dirname(current);
             }
-            current = path.dirname(current);
+            if (foundDirs.size > 0) break;
         }
     }
 
-    return null;
+    return Array.from(foundDirs);
+}
+
+/**
+ * Finds the primary root directory of the installed @didactika/moodle-client or @didactika/moodle-client-schemas package.
+ *
+ * @param {string} baseDir - Directory to start search from (where config is located)
+ * @returns {string | null} Package directory or null if not found
+ */
+export function findPackageDir(baseDir: string): string | null {
+    const dirs = findAllPackageDirs(baseDir);
+    return dirs.length > 0 ? dirs[0] : null;
 }
 
 /**
@@ -131,6 +151,7 @@ async function copyDir(src: string, dest: string): Promise<number> {
 /**
  * Synchronizes schemas from source directory (e.g. outDir) into the installed
  * package's dist/schemas directory.
+ * Wipes destination dist/schemas before copying to avoid stale schemas from previous runs.
  * Also ensures declaration files re-export from ./schemas/index.
  *
  * @param {string} sourceDir - Source directory containing generated schema files
@@ -141,42 +162,45 @@ export async function syncSchemas(
     sourceDir: string,
     baseDir: string
 ): Promise<{ syncedCount: number; targets: string[] }> {
-    const pkgDir = findPackageDir(baseDir);
+    const pkgDirs = findAllPackageDirs(baseDir);
     const resolvedSource = path.resolve(sourceDir);
     const targets: string[] = [];
-
     let syncedCount = 0;
-    if (pkgDir) {
-        const distSchemas = path.join(pkgDir, 'dist/schemas');
-        if (path.resolve(distSchemas) !== resolvedSource) {
-            targets.push(distSchemas);
-            syncedCount = await copyDir(resolvedSource, distSchemas);
+
+    if (pkgDirs.length > 0) {
+        for (const pkgDir of pkgDirs) {
+            const distSchemas = path.join(pkgDir, 'dist/schemas');
+            if (path.resolve(distSchemas) !== resolvedSource) {
+                targets.push(distSchemas);
+                await fs.rm(distSchemas, { recursive: true, force: true });
+                const count = await copyDir(resolvedSource, distSchemas);
+                syncedCount = Math.max(syncedCount, count);
+            }
+
+            // Ensure declaration files in package export ./schemas/index
+            const dtsFiles = [
+                path.join(pkgDir, 'dist/index.d.ts'),
+                path.join(pkgDir, 'dist/index.d.mts')
+            ];
+            for (const dtsFile of dtsFiles) {
+                if (existsSync(dtsFile)) {
+                    try {
+                        const content = await fs.readFile(dtsFile, 'utf-8');
+                        if (!content.includes('export * from "./schemas/index"')) {
+                            await fs.appendFile(dtsFile, '\nexport * from "./schemas/index";\n', 'utf-8');
+                        }
+                    } catch {
+                        // Ignore read/append error
+                    }
+                }
+            }
         }
     } else {
         const fallbackTarget = path.resolve(baseDir, 'node_modules/@didactika/moodle-client/dist/schemas');
         if (path.resolve(fallbackTarget) !== resolvedSource) {
             targets.push(fallbackTarget);
+            await fs.rm(fallbackTarget, { recursive: true, force: true });
             syncedCount = await copyDir(resolvedSource, fallbackTarget);
-        }
-    }
-
-    // Ensure declaration files in package export ./schemas/index
-    if (pkgDir) {
-        const dtsFiles = [
-            path.join(pkgDir, 'dist/index.d.ts'),
-            path.join(pkgDir, 'dist/index.d.mts')
-        ];
-        for (const dtsFile of dtsFiles) {
-            if (existsSync(dtsFile)) {
-                try {
-                    const content = await fs.readFile(dtsFile, 'utf-8');
-                    if (!content.includes('export * from "./schemas/index"')) {
-                        await fs.appendFile(dtsFile, '\nexport * from "./schemas/index";\n', 'utf-8');
-                    }
-                } catch {
-                    // Ignore read/append error
-                }
-            }
         }
     }
 
