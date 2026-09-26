@@ -62,7 +62,9 @@ function renderTypeNode(schema: WebServiceReturnSchema, indentLevel: number = 1)
     } else if (schema.kind === 'array') {
         const arraySchema = schema as WebServiceArraySchema;
         const innerType = renderTypeNode(arraySchema.content, indentLevel);
-        typeStr = innerType.includes('\n') || innerType.includes(';') ? `Array<${innerType}>` : `${innerType}[]`;
+        typeStr = innerType.includes('\n') || innerType.includes(';') || innerType.includes('|')
+            ? `Array<${innerType}>`
+            : `${innerType}[]`;
     } else if (schema.kind === 'object' || schema.kind === 'parameters') {
         const objSchema = schema as WebServiceObjectSchema;
         const keys = objSchema.keys || {};
