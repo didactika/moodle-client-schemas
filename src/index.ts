@@ -22,11 +22,23 @@ export {
 // HTTP and response types
 export type { HttpMethod, MoodleResponse } from './types/http.types';
 
-// Generator pipeline & interfaces
-export { runGeneratorPipeline, generateWebserviceFiles } from './generator/generator-pipeline';
-export { runGeneratorWithProgress, buildBox } from './generator/ui/progress-bar';
-export { loadOrCreateConfig, normalizeMoodleVersion, isMoodleVersionSupported } from './generator/config/config-manager';
-export type { MoodleClientConfig, RawMoodleClientConfig } from './generator/interfaces/config.interfaces';
+// Code emission & generation
+export {
+    generateWebserviceFiles,
+    GenerateWebserviceFilesOptions
+} from './generator/generator-pipeline';
+export {
+    emitWebserviceCode,
+    hasRequiredParameters
+} from './generator/emitter/ts-code-emitter';
+export {
+    emitBarrelCode,
+    BarrelEmitterOptions
+} from './generator/emitter/barrel-emitter';
+export {
+    resolveWebserviceFilePath,
+    toFullPascalCase
+} from './generator/resolver/path-resolver';
 export type { GeneratedServiceMetadata } from './generator/interfaces/generator.interfaces';
 
 // Generator errors
@@ -37,6 +49,3 @@ export {
     formatError,
     mapExtractionErrorToGeneratorError
 } from './generator/errors/generator-error';
-
-// Preloaded schemas are re-exported via declaration in dist/index.d.ts
-
