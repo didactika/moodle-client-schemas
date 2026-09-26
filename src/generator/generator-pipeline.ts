@@ -9,7 +9,7 @@ import {
 } from './interfaces/generator.interfaces';
 import { MoodleGeneratorError } from './errors/generator-error';
 
-export interface GenerateWebserviceFilesOptions extends BarrelEmitterOptions {}
+export type GenerateWebserviceFilesOptions = BarrelEmitterOptions;
 
 /**
  * Generates all individual `.webservice-client.ts` and `.webservice-client.d.ts` files
