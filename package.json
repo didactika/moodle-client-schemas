@@ -1,6 +1,6 @@
 {
   "name": "@didactika/moodle-client-schemas",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Typed client and JSON schemas for Moodle LMS Web Services API",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
