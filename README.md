@@ -18,8 +18,10 @@
 - [Quick Start](#quick-start)
 - [API Reference](#api-reference)
   - [`extractWebservice(options)`](#extractwebserviceoptions)
+  - [`generateWebserviceFiles(schemas, targetDir, options)`](#generatewebservicefilesschemas-targetdir-options)
   - [Specifying the Moodle Path (`moodlePath`)](#specifying-the-moodle-path-moodlepath)
-  - [Exported TypeScript Interface](#exported-typescript-interface)
+  - [Exported TypeScript Interfaces](#exported-typescript-interfaces)
+  - [Concrete Schema Example](#concrete-schema-example)
 - [Usage Examples](#usage-examples)
 - [Architecture & Extraction Flow](#architecture--extraction-flow)
   - [Pipeline Overview](#pipeline-overview)
@@ -42,12 +44,13 @@ Moodle LMS contains hundreds of Web Services scattered across its core subsystem
 
 ## Key Features
 
-- ⚡ **Pure In-Memory Execution:** Completely ephemeral AST and reflection lifecycle. Zero persistent disk pollution or state leak between extractions.
-- 🎯 **Fine-Grained Service Filtering:** Extract all services (`['*']`), specific components (`['core_*']`, `['mod_assign_*']`), or individual webservice names (`['core_user_get_users']`).
-- 🚀 **High-Throughput Concurrency:** Multi-process parallel introspection powered by worker concurrency control (700+ webservices introspected in seconds).
-- 🔍 **Multi-Strategy Class Resolution:** Seamlessly handles Frankenstyle PSR-4 namespaces, explicit classpaths (`enrol/externallib.php`, `backup/externallib.php`), legacy monolithic classes (`grades_external.php`), and Moodle 5+ structures (`lib/external/externallib.php`).
-- 🛡️ **Headless Mock Runtime:** Fully isolated PHP execution environment that mocks globals (`$CFG`, `$DB`, `$PAGE`, `$USER`), normalizes syntax differences, and uses JIT autoloading to resolve classes without requiring database connections.
-- 📦 **Strongly-Typed Contracts:** Emits strongly typed AST schema trees (`ObjectSchemaNode`, `ArraySchemaNode`, `ValueSchemaNode`) with Moodle `PARAM_*` type descriptions.
+- **Pure In-Memory Execution:** Completely ephemeral AST and reflection lifecycle. Zero persistent disk pollution or state leak between extractions.
+- **Fine-Grained Service Filtering:** Extract all services (`['*']`), specific components (`['core_*']`, `['mod_assign_*']`), or individual webservice names (`['core_user_get_users']`).
+- **High-Throughput Concurrency:** Multi-process parallel introspection powered by worker concurrency control (700+ webservices introspected in seconds).
+- **Multi-Strategy Class Resolution:** Seamlessly handles Frankenstyle PSR-4 namespaces, explicit classpaths (`enrol/externallib.php`, `backup/externallib.php`), legacy monolithic classes (`grades_external.php`), and Moodle 5+ structures (`lib/external/externallib.php`).
+- **Headless Mock Runtime:** Fully isolated PHP execution environment that mocks globals (`$CFG`, `$DB`, `$PAGE`, `$USER`), normalizes syntax differences, and uses JIT autoloading to resolve classes without requiring database connections.
+- **Strongly-Typed Contracts:** Emits strongly typed AST schema trees (`ObjectSchemaNode`, `ArraySchemaNode`, `ValueSchemaNode`) with Moodle type descriptions and resolved `primitiveType` mappings.
+- **TypeScript Code Generation:** Provides emitters (`generateWebserviceFiles`, `emitWebserviceCode`, `emitBarrelCode`) to output production-ready TypeScript client modules, parameter interfaces, and centralized barrel exports.
 
 ---
 
@@ -117,6 +120,26 @@ function extractWebservice(options: ExtractWebserviceOptions): Promise<ExtractWe
 
 ---
 
+### `generateWebserviceFiles(schemas, targetDir, options)`
+
+Generates complete, strongly typed TypeScript client declaration and implementation files (`.webservice.ts`, `.webservice.d.ts`) alongside a central barrel (`index.ts`, `index.d.ts`) directly from extracted schemas into a target directory.
+
+```typescript
+function generateWebserviceFiles(
+    schemas: WebServiceSchema[],
+    targetDir: string,
+    options?: GenerateWebserviceFilesOptions
+): Promise<void>;
+```
+
+#### `GenerateWebserviceFilesOptions`
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `importSource` | `string` | `'@didactika/moodle-client'` | Module specifier used in generated client files to import transport types (`HttpMethod`, `MoodleResponse`). |
+
+---
+
 ### Specifying the Moodle Path (`moodlePath`)
 
 The `moodlePath` option specifies the local filesystem directory containing the target Moodle codebase. The library automatically normalizes and resolves all path formats:
@@ -159,6 +182,7 @@ The library exports the primary data contracts representing extracted webservice
 
 ```typescript
 import {
+    // Extractor
     extractWebservice,
     ExtractWebserviceOptions,
     ExtractWebserviceResult,
@@ -171,7 +195,30 @@ import {
     WebServiceArraySchema,
     WebServiceValueSchema,
     WebServiceBaseSchema,
-    WebServiceSchemaKind
+    WebServiceSchemaKind,
+    PrimitiveType,
+
+    // Code Generator & Emitters
+    generateWebserviceFiles,
+    GenerateWebserviceFilesOptions,
+    emitWebserviceCode,
+    hasRequiredParameters,
+    emitBarrelCode,
+    BarrelEmitterOptions,
+    resolveWebserviceFilePath,
+    toFullPascalCase,
+    GeneratedServiceMetadata,
+
+    // Diagnostics & Errors
+    MoodleGeneratorError,
+    MoodleGeneratorErrorCode,
+    MoodleGeneratorErrorOptions,
+    formatError,
+    mapExtractionErrorToGeneratorError,
+
+    // Transport Types
+    HttpMethod,
+    MoodleResponse
 } from '@didactika/moodle-client-schemas';
 ```
 
@@ -285,17 +332,17 @@ export type WebServiceReturnSchema =
 
 Every schema node contains descriptive metadata derived directly from Moodle's internal `external_description` reflection API:
 
-| Field           | Type                                           | Description                                                                                                                                                                                                          |
-|-----------------|------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Field           | Type                                             | Description                                                                                                                                                                                                          |
+|-----------------|--------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `kind`          | `'parameters' \| 'object' \| 'array' \| 'value'` | Structural classification of the node in the schema tree.                                                                                                                                                            |
-| `description`   | `string`                                       | **Human-readable parameter description** written by the Moodle core/plugin author (maps to `$this->desc` in PHP).                                                                                                    |
-| `type`          | `string`                                       | Moodle sanitation constant (e.g., `PARAM_INT`, `PARAM_TEXT`, `PARAM_RAW`, `PARAM_BOOL`, `PARAM_EMAIL`, `PARAM_USERNAME`, `PARAM_ALPHANUM`).                                                                          |
-| `primitiveType` | `'string' \| 'number' \| 'boolean'`   | Primitive type.                                                                                               |
-| `required`      | `number`                                       | Requirement rule defined by Moodle constants:<br>• `1` (`VALUE_REQUIRED`): Mandatory parameter.<br>• `2` (`VALUE_OPTIONAL`): Optional parameter.<br>• `0` (`VALUE_DEFAULT`): Parameter has a fallback default value. |
-| `default`       | `unknown`                                      | Fallback value used by Moodle when an optional parameter is omitted by the caller.                                                                                                                                   |
-| `allownull`     | `boolean`                                      | Indicates whether `null` is explicitly permitted (`NULL_ALLOWED = true`, `NULL_NOT_ALLOWED = false`).                                                                                                                |
-| `keys`          | `Record<string, WebServiceReturnSchema>`       | Dictionary mapping property names to their child schemas for `object` and `parameters` nodes.                                                                                                                        |
-| `content`       | `WebServiceReturnSchema`                       | Definition of the element schema for homogeneous `array` nodes.                                                                                                                                                      |
+| `description`   | `string`                                         | **Human-readable parameter description** written by the Moodle core/plugin author (maps to `$this->desc` in PHP).                                                                                                    |
+| `type`          | `string`                                         | Moodle sanitation type string originating from Moodle's `PARAM_*` constants, evaluated at runtime to lowercase values (e.g., `'int'`, `'text'`, `'raw'`, `'raw_trimmed'`, `'bool'`, `'username'`, `'email'`, `'alphanumext'`). |
+| `primitiveType` | `'string' \| 'number' \| 'boolean'`              | Standard primitive scalar TypeScript data type mapped from Moodle parameter types.                                                                                                                                   |
+| `required`      | `number`                                         | Requirement rule defined by Moodle constants:<br>• `1` (`VALUE_REQUIRED`): Mandatory parameter.<br>• `2` (`VALUE_OPTIONAL`): Optional parameter.<br>• `0` (`VALUE_DEFAULT`): Parameter has a fallback default value. |
+| `default`       | `unknown`                                        | Fallback value used by Moodle when an optional parameter is omitted by the caller (or `null` if none).                                                                                                              |
+| `allownull`     | `boolean`                                        | Indicates whether `null` is explicitly permitted (`NULL_ALLOWED = true`, `NULL_NOT_ALLOWED = false`).                                                                                                                |
+| `keys`          | `Record<string, WebServiceReturnSchema>`         | Dictionary mapping property names to their child schemas for `object` and `parameters` nodes.                                                                                                                        |
+| `content`       | `WebServiceReturnSchema`                         | Definition of the element schema for homogeneous `array` nodes.                                                                                                                                                      |
 
 #### Concrete Schema Example
 
@@ -304,34 +351,66 @@ Here is how an extracted `core_user_create_users` schema looks in runtime memory
 ```json
 {
   "name": "core_user_create_users",
-  "description": "Create users in Moodle",
+  "description": "Create users.",
   "parameters": {
     "kind": "parameters",
     "keys": {
       "users": {
-        "kind": "array",
-        "description": "List of user objects to create",
         "required": 1,
+        "default": null,
+        "allownull": false,
+        "kind": "array",
+        "description": "The array of users to create",
         "content": {
+          "required": 1,
+          "default": null,
+          "allownull": false,
           "kind": "object",
           "keys": {
             "username": {
+              "required": 1,
+              "default": null,
+              "allownull": true,
+              "type": "username",
               "kind": "value",
-              "type": "PARAM_USERNAME",
-              "description": "Username in lowercase",
-              "required": 1
+              "primitiveType": "string",
+              "description": "Username policy is defined in Moodle security config."
             },
             "password": {
+              "required": 2,
+              "default": null,
+              "allownull": true,
+              "type": "raw",
               "kind": "value",
-              "type": "PARAM_RAW",
-              "description": "Plain text password",
-              "required": 1
+              "primitiveType": "string",
+              "description": "Plain text password consisting of any characters"
+            },
+            "firstname": {
+              "required": 1,
+              "default": null,
+              "allownull": true,
+              "type": "notags",
+              "kind": "value",
+              "primitiveType": "string",
+              "description": "The first name(s) of the user"
+            },
+            "lastname": {
+              "required": 1,
+              "default": null,
+              "allownull": true,
+              "type": "notags",
+              "kind": "value",
+              "primitiveType": "string",
+              "description": "The family name of the user"
             },
             "email": {
+              "required": 1,
+              "default": null,
+              "allownull": true,
+              "type": "raw_trimmed",
               "kind": "value",
-              "type": "PARAM_EMAIL",
-              "description": "User valid email address",
-              "required": 1
+              "primitiveType": "string",
+              "description": "A valid and unique email address"
             }
           }
         }
@@ -339,20 +418,33 @@ Here is how an extracted `core_user_create_users` schema looks in runtime memory
     }
   },
   "returns": {
+    "required": 1,
+    "default": null,
+    "allownull": false,
     "kind": "array",
-    "description": "List of created user identifiers",
     "content": {
+      "required": 1,
+      "default": null,
+      "allownull": false,
       "kind": "object",
       "keys": {
         "id": {
+          "required": 1,
+          "default": null,
+          "allownull": true,
+          "type": "int",
           "kind": "value",
-          "type": "PARAM_INT",
-          "description": "Created user ID"
+          "primitiveType": "number",
+          "description": "user id"
         },
         "username": {
+          "required": 1,
+          "default": null,
+          "allownull": true,
+          "type": "username",
           "kind": "value",
-          "type": "PARAM_USERNAME",
-          "description": "Username"
+          "primitiveType": "string",
+          "description": "user name"
         }
       }
     }
@@ -479,11 +571,28 @@ await extractWebservice({
 });
 ```
 
+### 5. Generate TypeScript Client Files
+
+Emit strongly typed `.webservice.ts`, `.webservice.d.ts`, and index barrel files from extracted schemas:
+
+```typescript
+import { extractWebservice, generateWebserviceFiles } from '@didactika/moodle-client-schemas';
+
+const { schemas } = await extractWebservice({
+    moodlePath: '/var/www/moodle',
+    services: ['core_user_*']
+});
+
+await generateWebserviceFiles(schemas, './src/schemas', {
+    importSource: '@didactika/moodle-client'
+});
+```
+
 ---
 
 ## Schema Generation Error Codes
 
-When generating schemas (via `runGeneratorWithProgress`, `runGeneratorPipeline`, or CLI), all failures are captured and presented as structured diagnostics without stack traces:
+When extracting or generating schemas (via `extractWebservice`, `generateWebserviceFiles`, or higher-level CLIs), all failures are captured and presented as structured diagnostics without stack traces:
 
 ```text
 [moodle-client] ERROR: <Title> (<CODE>)
@@ -544,7 +653,7 @@ The codebase strictly enforces ESLint rules, TypeScript strict typing, and a max
 npm run build      # Compile dual CJS/ESM distribution and TypeScript declarations (.d.ts)
 npm run lint       # Validate code style, complexity <= 3, and zero unused variables
 npm run typecheck  # Validate types with tsc --noEmit
-npm test           # Run full verification (lint + typecheck + 23 unit & integration test suites)
+npm test           # Run full verification (36 unit & integration test suites, 226 tests)
 ```
 
 ---

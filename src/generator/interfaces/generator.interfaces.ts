@@ -28,7 +28,7 @@ export {
 export interface GeneratedServiceMetadata {
     /** Exact webservice name as registered in Moodle (e.g. 'core_course_get_courses') */
     name: string;
-    /** Relative import path for index.ts (e.g. './core/course/get_courses.webservice-client') */
+    /** Relative import path for index.ts (e.g. './core/course/get_courses.webservice') */
     relativeImportPath: string;
     /** Whether this service has at least one mandatory parameter (VALUE_REQUIRED) */
     hasRequiredParams: boolean;

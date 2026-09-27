@@ -5,13 +5,13 @@ describe('Barrel & Declaration Merging Emitter', () => {
         const services = [
             {
                 name: 'core_course_get_courses',
-                relativeImportPath: './core/course/get_courses.webservice-client',
+                relativeImportPath: './core/course/get_courses.webservice',
                 hasRequiredParams: false,
                 description: 'Return course details'
             },
             {
                 name: 'core_user_create_users',
-                relativeImportPath: './core/user/create_users.webservice-client',
+                relativeImportPath: './core/user/create_users.webservice',
                 hasRequiredParams: true,
                 description: 'Create users'
             }
@@ -20,8 +20,8 @@ describe('Barrel & Declaration Merging Emitter', () => {
         const barrelCode = emitBarrelCode(services);
 
         // Verify module re-exports
-        expect(barrelCode).toContain("export * from './core/course/get_courses.webservice-client'");
-        expect(barrelCode).toContain("export * from './core/user/create_users.webservice-client'");
+        expect(barrelCode).toContain("export * from './core/course/get_courses.webservice'");
+        expect(barrelCode).toContain("export * from './core/user/create_users.webservice'");
 
         // Verify interface
         expect(barrelCode).toContain('export interface GeneratedMoodleServices');
@@ -51,7 +51,7 @@ describe('Barrel & Declaration Merging Emitter', () => {
         const services = [
             {
                 name: 'core_course_get_courses',
-                relativeImportPath: './core/course/get_courses.webservice-client',
+                relativeImportPath: './core/course/get_courses.webservice',
                 hasRequiredParams: false,
                 description: 'Return course details'
             }

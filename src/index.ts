@@ -25,6 +25,7 @@ export type { HttpMethod, MoodleResponse } from './types/http.types';
 // Code emission & generation
 export {
     generateWebserviceFiles,
+    cleanPreviousWebserviceFiles,
     GenerateWebserviceFilesOptions
 } from './generator/generator-pipeline';
 export {
