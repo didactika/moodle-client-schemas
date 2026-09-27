@@ -101,25 +101,27 @@ describe('generateWebserviceFiles', () => {
 
         await generateWebserviceFiles(fakeSchemas, targetDir);
 
-        // Check course files
-        const courseTsFile = path.join(targetDir, 'core/course/get_courses.webservice-client.ts');
-        const courseDtsFile = path.join(targetDir, 'core/course/get_courses.webservice-client.d.ts');
-        expect(await fs.access(courseTsFile).then(() => true).catch(() => false)).toBe(true);
+        // Check course files (only .d.ts should exist, no .ts)
+        const courseTsFile = path.join(targetDir, 'core/course/get_courses.webservice.ts');
+        const courseDtsFile = path.join(targetDir, 'core/course/get_courses.webservice.d.ts');
         expect(await fs.access(courseDtsFile).then(() => true).catch(() => false)).toBe(true);
+        expect(await fs.access(courseTsFile).then(() => true).catch(() => false)).toBe(false);
 
-        const courseContent = await fs.readFile(courseTsFile, 'utf-8');
+        const courseContent = await fs.readFile(courseDtsFile, 'utf-8');
         expect(courseContent).toContain('export interface CoreCourseGetCoursesParams');
         expect(courseContent).toContain('export type CoreCourseGetCoursesReturns');
 
-        // Check user files
-        const userTsFile = path.join(targetDir, 'core/user/get_users.webservice-client.ts');
-        expect(await fs.access(userTsFile).then(() => true).catch(() => false)).toBe(true);
+        // Check user files (only .d.ts should exist, no .ts)
+        const userTsFile = path.join(targetDir, 'core/user/get_users.webservice.ts');
+        const userDtsFile = path.join(targetDir, 'core/user/get_users.webservice.d.ts');
+        expect(await fs.access(userDtsFile).then(() => true).catch(() => false)).toBe(true);
+        expect(await fs.access(userTsFile).then(() => true).catch(() => false)).toBe(false);
 
-        // Check index barrels
+        // Check index barrels (only index.d.ts should exist, no index.ts)
         const indexTsFile = path.join(targetDir, 'index.ts');
         const indexDtsFile = path.join(targetDir, 'index.d.ts');
-        expect(await fs.access(indexTsFile).then(() => true).catch(() => false)).toBe(true);
         expect(await fs.access(indexDtsFile).then(() => true).catch(() => false)).toBe(true);
+        expect(await fs.access(indexTsFile).then(() => true).catch(() => false)).toBe(false);
 
         const indexContent = await fs.readFile(indexDtsFile, 'utf-8');
         expect(indexContent).toContain('export interface GeneratedMoodleServices');
@@ -128,14 +130,32 @@ describe('generateWebserviceFiles', () => {
         expect(indexContent).toContain('declare module "@didactika/moodle-client"');
     });
 
-    it('should wipe targetDir before generating to eliminate stale files', async () => {
-        await fs.mkdir(targetDir, { recursive: true });
-        const staleFile = path.join(targetDir, 'stale-service.ts');
-        await fs.writeFile(staleFile, '// old', 'utf-8');
+    it('should selectively clean targetDir before generating, eliminating stale webservices while preserving user files', async () => {
+        await fs.mkdir(path.join(targetDir, 'core/course'), { recursive: true });
+        await fs.mkdir(path.join(targetDir, 'core/notes'), { recursive: true });
+
+        const staleWebservice = path.join(targetDir, 'core/course/stale-service.webservice.d.ts');
+        await fs.writeFile(staleWebservice, '// old webservice', 'utf-8');
+
+        const userFileInSubdir = path.join(targetDir, 'core/notes/my-notes.txt');
+        await fs.writeFile(userFileInSubdir, 'user notes', 'utf-8');
+
+        const userFileInRoot = path.join(targetDir, 'README.md');
+        await fs.writeFile(userFileInRoot, '# User Readme', 'utf-8');
 
         await generateWebserviceFiles([], targetDir);
 
-        expect(await fs.access(staleFile).then(() => true).catch(() => false)).toBe(false);
+        // Stale webservice should be deleted
+        expect(await fs.access(staleWebservice).then(() => true).catch(() => false)).toBe(false);
+        // Empty course directory should be pruned
+        expect(await fs.access(path.join(targetDir, 'core/course')).then(() => true).catch(() => false)).toBe(false);
+
+        // User files should be strictly preserved
+        expect(await fs.access(userFileInRoot).then(() => true).catch(() => false)).toBe(true);
+        expect(await fs.access(userFileInSubdir).then(() => true).catch(() => false)).toBe(true);
+        expect(await fs.access(path.join(targetDir, 'core/notes')).then(() => true).catch(() => false)).toBe(true);
+
+        // Fresh index.d.ts should be generated
         expect(await fs.access(path.join(targetDir, 'index.d.ts')).then(() => true).catch(() => false)).toBe(true);
     });
 });
