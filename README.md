@@ -22,10 +22,10 @@
   - [Specifying the Moodle Path (`moodlePath`)](#specifying-the-moodle-path-moodlepath)
   - [Exported TypeScript Interfaces](#exported-typescript-interfaces)
   - [Concrete Schema Example](#concrete-schema-example)
+- [Documentation](#documentation)
 - [Usage Examples](#usage-examples)
 - [Architecture & Extraction Flow](#architecture--extraction-flow)
   - [Pipeline Overview](#pipeline-overview)
-  - [Sandboxed PHP Adapter](#sandboxed-php-adapter)
 - [Service Filtering](#service-filtering)
 - [Schema Generation Error Codes](#schema-generation-error-codes)
 - [Development & Verification](#development--verification)
@@ -44,12 +44,13 @@ Moodle LMS contains hundreds of Web Services scattered across its core subsystem
 
 ## Key Features
 
-- **Pure In-Memory Execution:** Completely ephemeral AST and reflection lifecycle. Zero persistent disk pollution or state leak between extractions.
+- **Read-Only on Your Codebase:** The Moodle directory is never modified. Each run uses a private temporary directory (PHP scratch dataroot and, for Moodle < 4.0 only, a PHP 8-normalized copy of the codebase) that is removed when the run ends. Concurrent extractions in the same process are isolated from each other.
+- **Strict Signatures:** A service is only reported as extracted when its real class exposes both `{method}_parameters()` and `{method}_returns()` and neither depends on synthetic stubs. Missing classes, missing methods and exceptions are reported as errors instead of empty or borrowed schemas.
 - **Fine-Grained Service Filtering:** Extract all services (`['*']`), specific components (`['core_*']`, `['mod_assign_*']`), or individual webservice names (`['core_user_get_users']`).
 - **High-Throughput Concurrency:** Multi-process parallel introspection powered by worker concurrency control (700+ webservices introspected in seconds).
 - **Multi-Strategy Class Resolution:** Seamlessly handles Frankenstyle PSR-4 namespaces, explicit classpaths (`enrol/externallib.php`, `backup/externallib.php`), legacy monolithic classes (`grades_external.php`), and Moodle 5+ structures (`lib/external/externallib.php`).
 - **Headless Mock Runtime:** Fully isolated PHP execution environment that mocks globals (`$CFG`, `$DB`, `$PAGE`, `$USER`), normalizes syntax differences, and uses JIT autoloading to resolve classes without requiring database connections.
-- **Strongly-Typed Contracts:** Emits strongly typed AST schema trees (`ObjectSchemaNode`, `ArraySchemaNode`, `ValueSchemaNode`) with Moodle type descriptions and resolved `primitiveType` mappings.
+- **Strongly-Typed Contracts:** Emits strongly typed AST schema trees (`WebServiceObjectSchema`, `WebServiceArraySchema`, `WebServiceValueSchema`) with Moodle type descriptions and resolved `primitiveType` mappings.
 - **TypeScript Code Generation:** Provides emitters (`generateWebserviceFiles`, `emitWebserviceCode`, `emitBarrelCode`) to output production-ready TypeScript client modules, parameter interfaces, and centralized barrel exports.
 
 ---
@@ -60,7 +61,7 @@ Moodle LMS contains hundreds of Web Services scattered across its core subsystem
 npm install @didactika/moodle-client-schemas
 ```
 
-*Requirements:* Node.js `>= 20.0.0` and PHP CLI `>= 7.4` on the host system.
+*Requirements:* Node.js `>= 20.0.0` and PHP CLI `>= 8.0` on the host system.
 
 ---
 
@@ -79,7 +80,7 @@ async function main() {
     const { schemas, errors }: ExtractWebserviceResult = await extractWebservice({
         moodlePath: '~/tmp/moodle',
         services: ['core_user_*', 'mod_forum_get_forum_access_information'],
-        concurrency: 16
+        progress: true
     });
 
     console.log(`Successfully extracted ${schemas.length} webservices.`);
@@ -116,13 +117,17 @@ function extractWebservice(options: ExtractWebserviceOptions): Promise<ExtractWe
 |---|---|---|---|
 | `moodlePath` | `string` | *Required* | Absolute or relative path to the local Moodle source codebase (supports `~` expansion). |
 | `services` | `string[]` | `['*']` | Filter list of webservices to extract. Supports exact names (`'core_user_get_users'`) and wildcard prefixes (`'core_*'`, `'mod_assign_*'`). Pass `['*']` or omit to extract all available webservices. |
-| `concurrency` | `number` | `8` | Maximum number of concurrent PHP introspection sub-processes. |
+| `concurrency` | `number` | `8` | Maximum number of concurrent isolated PHP processes used to retry services left pending after a crash or stall of the batch runner. |
+| `timeout` | `number` | `15000` | Maximum time (ms) the PHP sandbox may spend on a single service without progress. The stalled service is reported as `INTROSPECTION_FAILED`; the remaining ones are retried in isolated processes. |
+| `progress` | `boolean \| (progress: WebServiceProgress) => void` | `undefined` | `true` renders a terminal progress card; a function receives progress snapshots. |
 
 ---
 
 ### `generateWebserviceFiles(schemas, targetDir, options)`
 
-Generates complete, strongly typed TypeScript client declaration and implementation files (`.webservice.ts`, `.webservice.d.ts`) alongside a central barrel (`index.ts`, `index.d.ts`) directly from extracted schemas into a target directory.
+Generates strongly typed TypeScript declaration files (`.webservice.d.ts`) alongside a central barrel (`index.d.ts`) directly from extracted schemas into a target directory.
+
+Before writing, previously generated files are cleaned selectively: `*.webservice(.d).ts` and `*.webservice-client(.d).ts` files anywhere in the tree, plus `index.ts` / `index.d.ts` / `index.d.mts` **only at the root and only if they are generated barrels**. Directories are pruned only when they became empty because generated files were removed. Any other file or directory (including your own `index.ts` files in subfolders) is left untouched.
 
 ```typescript
 function generateWebserviceFiles(
@@ -136,7 +141,22 @@ function generateWebserviceFiles(
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `importSource` | `string` | `'@didactika/moodle-client'` | Module specifier used in generated client files to import transport types (`HttpMethod`, `MoodleResponse`). |
+| `importSource` | `string` | `'@didactika/moodle-client'` | Module the barrel imports the `HttpMethod` and `MoodleResponse<T>` types from. Any module exporting both works; this library does not define them. A relative path is resolved from `targetDir/index.d.ts`. |
+| `augmentClient` | `boolean` | `false` | When `true`, the barrel also emits `declare module "<importSource>" { interface MoodleClient extends GeneratedMoodleServices {} }`, so `client.<service>(params)` type-checks. |
+
+#### What the generated files do, and what they do not do
+
+The output is **types only**. By default it describes every service (`CoreCourseGetCoursesParams`, `CoreCourseGetCoursesReturns`, and a `GeneratedMoodleServices` interface with all of them) and attaches nothing to any client. Use the types with whatever client you have.
+
+`augmentClient: true` additionally tells TypeScript that the `MoodleClient` of `importSource` has one method per service. It still adds no runtime code, so it is only safe when that client answers every service name with a function:
+
+| Client | `augmentClient: true` |
+|---|---|
+| Answers any service name with a function (e.g. a `Proxy`) | Works. See [examples/09-custom-client](examples/09-custom-client/). |
+| Exposes services some other way (a namespace such as `client.webservice.x()`, or only `call(name, params)`) | Compiles, then throws `TypeError: ... is not a function`. Keep the default (`false`). |
+| `importSource` does not export `MoodleClient` | Compiles silently; the methods land on an unused interface. |
+
+Full details: [docs/api-reference.md](docs/api-reference.md#typed-methods-on-your-client-augmentclient).
 
 ---
 
@@ -214,11 +234,7 @@ import {
     MoodleGeneratorErrorCode,
     MoodleGeneratorErrorOptions,
     formatError,
-    mapExtractionErrorToGeneratorError,
-
-    // Transport Types
-    HttpMethod,
-    MoodleResponse
+    mapExtractionErrorToGeneratorError
 } from '@didactika/moodle-client-schemas';
 ```
 
@@ -300,8 +316,10 @@ export interface WebServiceBaseSchema {
 /** Primitive leaf value schema (e.g., PARAM_INT, PARAM_TEXT, PARAM_BOOL) */
 export interface WebServiceValueSchema extends WebServiceBaseSchema {
     kind?: 'value';
-    /** Moodle parameter type constant (e.g. 'PARAM_INT', 'PARAM_TEXT', 'PARAM_RAW') */
+    /** Value of the PARAM_* constant, lowercase (PARAM_INT is 'int', PARAM_RAW_TRIMMED is 'raw_trimmed') */
     type: string;
+    /** JSON primitive the value travels as */
+    primitiveType?: PrimitiveType; // 'string' | 'number' | 'boolean'
 }
 
 /** Associative object structure with property keys (maps to external_single_structure) */
@@ -454,6 +472,16 @@ Here is how an extracted `core_user_create_users` schema looks in runtime memory
 
 ---
 
+## Documentation
+
+| | |
+| --- | --- |
+| [docs/api-reference.md](docs/api-reference.md) | every exported function and type, schema format and generated output |
+| [docs/errors.md](docs/errors.md) | every error code, what causes it and how to fix it |
+| [examples/](examples/) | runnable scripts: extraction, filtering, error handling, code generation |
+
+---
+
 ## Usage Examples
 
 ### 1. Extract All Web Services in the Repository
@@ -461,17 +489,17 @@ Here is how an extracted `core_user_create_users` schema looks in runtime memory
 ```typescript
 import { extractWebservice } from '@didactika/moodle-client-schemas';
 
-const schemas = await extractWebservice({
+const { schemas, errors } = await extractWebservice({
     moodlePath: '/var/www/moodle'
 });
 
-console.log(`Successfully extracted ${schemas.length} webservices.`);
+console.log(`Successfully extracted ${schemas.length} webservices, ${errors.length} errors.`);
 ```
 
 ### 2. Filter by Component Prefix with Wildcards
 
 ```typescript
-const schemas = await extractWebservice({
+const { schemas, errors } = await extractWebservice({
     moodlePath: '~/moodle',
     services: [
         'core_user_*',
@@ -485,7 +513,7 @@ const schemas = await extractWebservice({
 ### 3. Extract Specific Web Services by Exact Name
 
 ```typescript
-const schemas = await extractWebservice({
+const { schemas, errors } = await extractWebservice({
     moodlePath: './moodle',
     services: [
         'core_user_get_users',
@@ -495,17 +523,39 @@ const schemas = await extractWebservice({
 });
 ```
 
-### 4. High-Throughput Parallel Processing
+### 4. Tuning Recovery for Large or Slow Codebases
 
-For large Moodle installations with 700+ webservices, set `concurrency` to utilize available CPU cores:
+All services are introspected by a single streaming PHP batch process. If it crashes or a service stalls longer than `timeout`, the affected service is reported and the remaining ones are retried in isolated processes, at most `concurrency` at a time:
 
 ```typescript
-const schemas = await extractWebservice({
+const { schemas, errors } = await extractWebservice({
     moodlePath: '/var/www/moodle',
     services: ['*'],
-    concurrency: 16 // Uses 16 parallel PHP introspection workers
+    timeout: 30000,  // allow up to 30 s per service without progress
+    concurrency: 16  // up to 16 isolated fallback PHP processes
 });
 ```
+
+### 5. Generate TypeScript Declarations
+
+Emit `.webservice.d.ts` files and an `index.d.ts` barrel from extracted schemas. The files contain types only (see [What the generated files do](#what-the-generated-files-do-and-what-they-do-not-do)).
+
+```typescript
+import { extractWebservice, generateWebserviceFiles } from '@didactika/moodle-client-schemas';
+
+const { schemas } = await extractWebservice({
+    moodlePath: '/var/www/moodle',
+    services: ['core_course_get_courses']
+});
+
+await generateWebserviceFiles(schemas, './src/moodle-types');
+// ./src/moodle-types/core/course/get_courses.webservice.d.ts
+// ./src/moodle-types/index.d.ts
+```
+
+For typed methods directly on your own client, see `augmentClient` and [examples/09-custom-client](examples/09-custom-client/).
+
+More scripts in [examples/](examples/).
 
 ---
 
@@ -538,15 +588,15 @@ const schemas = await extractWebservice({
              Typed WebServiceSchema[] (Pure JSON in RAM)
 ```
 
-1. **Scanner:** Recursively discovers all `**/db/services.php` entry points, ignoring irrelevant folders (`node_modules`, `vendor`, `.git`, `cache`).
+1. **Scanner:** Recursively discovers all `**/db/services.php` entry points, skipping `node_modules`, `vendor`, `.git`, `tests`, `fixtures`, `localcache`, `pix`, `lang` and `install`. Symlinked plugin directories are followed, each real directory once.
 2. **In-Memory AST Parser:** Parses PHP files into AST representations using `php-parser` and caches nodes in RAM during the extraction lifecycle.
-3. **Service Extractor:** Analyzes AST arrays to extract declared `$functions` configurations, normalizing modern Moodle 4.x/5.x rules (such as optional `methodname` defaulting to `'execute'`).
+3. **Service Extractor:** Replays the `$functions` assignments of each file (literal arrays, `$functions['x'] = [...]`, `+=`, `array_merge()`, `unset()`, every branch of `if` blocks), normalizing modern Moodle 4.x/5.x rules (such as optional `methodname` defaulting to `'execute'`).
 4. **Class Resolver:** Multi-tier path discovery:
    - **Explicit Classpath:** Directly resolves explicit `classpath` attributes relative to repository root.
    - **Modern PSR-4:** Resolves component namespaces using `lib/components.json` or `core_component` class mapping.
    - **Subplugin Hierarchy:** Dynamically discovers subplugin directories from `db/subplugins.json`.
    - **Core Subsystems:** Locates subsystem handlers in `lib/classes/*_external.php` or modern `lib/external/externallib.php`.
-5. **Sandboxed PHP Introspector:** Spawns worker sub-processes via `p-limit` executing `cli-executor.php` against `headless-bootstrap.php`, invoking `classname::methodname_parameters()` and `classname::methodname_returns()`.
+5. **Sandboxed PHP Introspector:** Streams every service through one `batch-cli-executor.php` process (inactivity watchdog per service) on top of `headless-bootstrap.php`, invoking `classname::methodname_parameters()` and `classname::methodname_returns()` strictly. Services left pending by a crash or stall are retried with `cli-executor.php` in isolated processes (bounded by `concurrency`). For Moodle < 4.0, `normalize-cli.php` first rewrites a disposable copy of the codebase for PHP 8 syntax compatibility.
 
 ---
 
@@ -571,23 +621,6 @@ await extractWebservice({
 });
 ```
 
-### 5. Generate TypeScript Client Files
-
-Emit strongly typed `.webservice.ts`, `.webservice.d.ts`, and index barrel files from extracted schemas:
-
-```typescript
-import { extractWebservice, generateWebserviceFiles } from '@didactika/moodle-client-schemas';
-
-const { schemas } = await extractWebservice({
-    moodlePath: '/var/www/moodle',
-    services: ['core_user_*']
-});
-
-await generateWebserviceFiles(schemas, './src/schemas', {
-    importSource: '@didactika/moodle-client'
-});
-```
-
 ---
 
 ## Schema Generation Error Codes
@@ -604,8 +637,8 @@ Action:  <Exact action required to resolve it>
 
 | Code | Title | Description & Recommended Action |
 |---|---|---|
-| `ERR_PHP_NOT_FOUND` | PHP CLI Not Found | The `php` executable was not found in system `PATH`. Install PHP 7.4 or higher and ensure `php` is in your `PATH`. |
-| `ERR_PHP_VERSION_UNSUPPORTED` | Unsupported PHP Version | Detected PHP version is lower than 7.4. Moodle schema extraction requires PHP 7.4+. Upgrade your PHP CLI installation. |
+| `ERR_PHP_NOT_FOUND` | PHP CLI Not Found | The `php` executable was not found in system `PATH`. Install PHP 8.0 or higher and ensure `php` is in your `PATH`. |
+| `ERR_PHP_VERSION_UNSUPPORTED` | Unsupported PHP Version | Detected PHP version is lower than 8.0. Moodle schema extraction requires PHP 8.0+. Upgrade your PHP CLI installation. |
 
 ### Remote Archive Download & Network
 
@@ -653,7 +686,7 @@ The codebase strictly enforces ESLint rules, TypeScript strict typing, and a max
 npm run build      # Compile dual CJS/ESM distribution and TypeScript declarations (.d.ts)
 npm run lint       # Validate code style, complexity <= 3, and zero unused variables
 npm run typecheck  # Validate types with tsc --noEmit
-npm test           # Run full verification (36 unit & integration test suites, 226 tests)
+npm test           # Run full verification (43 unit & integration test suites, 287 tests)
 ```
 
 ---
@@ -663,7 +696,6 @@ npm test           # Run full verification (36 unit & integration test suites, 2
 Contributions, issues, and feature requests are welcome!
 
 * **Eduardo Cubias** ([@Eduardo-Cubiasss](https://github.com/Eduardo-Cubiasss))
-* **Hector Arrechea** ([@hectorlazaroarrechea](https://github.com/hectorlazaroarrechea))
 
 ---
 
