@@ -8,28 +8,25 @@ namespace Didactika\MoodleClientSchemas\Bootstrap;
  */
 class SyntaxNormalizer {
     /**
-     * Adapts legacy PHP files in target Moodle directory if Moodle version < 4.0.
+     * Rewrites legacy PHP files IN PLACE when Moodle version < 4.0 and the runtime is PHP 8+.
      *
-     * @param string $moodleRoot Absolute path to Moodle root directory.
-     * @return void
+     * Destructive by design: it must only be pointed at a disposable copy of the codebase
+     * (the Node.js host copies legacy codebases into a temporary directory before calling it).
+     *
+     * @param string $moodleRoot Absolute path to the disposable Moodle copy.
+     * @return bool True if the tree was normalized.
      */
-    public static function normalize(string $moodleRoot): void {
+    public static function normalize(string $moodleRoot): bool {
         if (PHP_VERSION_ID < 80000 || !is_dir($moodleRoot)) {
-            return;
-        }
-
-        $marker = $moodleRoot . '/.php8_normalized';
-        if (file_exists($marker)) {
-            return;
+            return false;
         }
 
         if (!self::isLegacyMoodle($moodleRoot)) {
-            @file_put_contents($marker, '1');
-            return;
+            return false;
         }
 
         self::scanAndNormalizeDirectory($moodleRoot);
-        @file_put_contents($marker, '1');
+        return true;
     }
 
     /**
@@ -76,6 +73,10 @@ class SyntaxNormalizer {
             }
 
             $path = $dir . '/' . $item;
+            // Never follow links: their targets live outside the tree being normalized.
+            if (is_link($path)) {
+                continue;
+            }
             if (is_dir($path)) {
                 self::scanAndNormalizeDirectory($path);
             } elseif (str_ends_with($item, '.php')) {

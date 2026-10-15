@@ -237,6 +237,20 @@ class HeadlessBootstrap {
     }
 
     /**
+     * Resolves the scratch dataroot, preferring the per-run directory provided by the Node.js host.
+     *
+     * @param string $moodleRoot Moodle root path.
+     * @return string Dataroot directory path.
+     */
+    public static function resolveDataroot(string $moodleRoot): string {
+        $provided = getenv('MOODLE_SCHEMAS_DATAROOT');
+        if (is_string($provided) && $provided !== '') {
+            return $provided;
+        }
+        return sys_get_temp_dir() . '/moodle_headless_' . md5($moodleRoot);
+    }
+
+    /**
      * Initializes global $CFG with all expected directory roots and user preferences.
      *
      * @param string $moodleRoot Moodle root path.
@@ -248,7 +262,7 @@ class HeadlessBootstrap {
         $CFG->dirroot              = self::resolveMoodleDirroot($moodleRoot);
         $CFG->libdir               = $CFG->dirroot . '/lib';
 
-        $dataroot                  = sys_get_temp_dir() . '/moodle_headless_' . md5($moodleRoot);
+        $dataroot                  = self::resolveDataroot($moodleRoot);
         if (!is_dir($dataroot)) {
             @mkdir($dataroot, 0777, true);
         }

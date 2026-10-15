@@ -86,6 +86,8 @@ export interface SignatureExtractionPayload {
     classFile: string;
     classname: string;
     methodname: string;
+    /** Optional scratch dataroot exported to PHP through MOODLE_SCHEMAS_DATAROOT */
+    dataroot?: string;
 }
 
 /**
@@ -93,6 +95,20 @@ export interface SignatureExtractionPayload {
  */
 export interface JsonErrorPayload {
     error?: string;
+    /** Machine-readable WebServiceErrorCode emitted by the PHP adapter */
+    errorCode?: string;
     file?: string;
     line?: number;
+}
+
+/**
+ * Failure reported by execFile when the PHP adapter process fails.
+ */
+export interface PhpProcessFailure {
+    /** Exit code (number) or Node.js errno (e.g. 'EACCES', 'ENOENT') */
+    code?: string | number;
+    /** True when execFile killed the process after its timeout elapsed */
+    killed?: boolean;
+    stderr?: string;
+    message?: string;
 }

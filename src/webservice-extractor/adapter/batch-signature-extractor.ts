@@ -1,30 +1,23 @@
-import fs from 'fs';
-import path from 'path';
 import readline from 'readline';
 import { spawn, ChildProcess } from 'child_process';
 import {
     BatchServiceItem,
     BatchStreamItem,
     BatchFatalErrorPayload,
-    BatchExecutionResult
+    BatchExecutionResult,
+    BatchProcessState,
+    BatchProgressListener,
+    IdleWatchdog
 } from '../interfaces/batch.interfaces';
+import { BatchExtractionOptions } from '../interfaces/runtime.interfaces';
+import { SignatureExtractionPayload } from '../interfaces/signature.interfaces';
 import { getPhpBinary } from './php-runtime';
-import { normalizeWebserviceSignature, extractWebserviceSignature } from './php-signature-extractor';
+import { normalizeWebserviceSignature, extractWebserviceSignature, buildPhpEnv } from './php-signature-extractor';
+import { resolveAdapterScript } from './script-locator';
+import { runWithConcurrency, normalizeConcurrency } from '../utils/concurrency';
+import { resolveErrorCode } from '../utils/error-code-utils';
 
-/**
- * Searches candidate locations and returns first existing candidate path.
- *
- * @param {string[]} candidates - Array of possible filesystem paths.
- * @returns {string | null} First existing path or null.
- */
-function resolveExistingPath(candidates: string[]): string | null {
-    for (const candidate of candidates) {
-        if (fs.existsSync(candidate)) {
-            return candidate;
-        }
-    }
-    return null;
-}
+const DEFAULT_FALLBACK_CONCURRENCY = 8;
 
 /**
  * Resolves absolute path to batch-cli-executor.php across source and dist builds.
@@ -32,14 +25,7 @@ function resolveExistingPath(candidates: string[]): string | null {
  * @returns {string} Absolute path to batch-cli-executor.php.
  */
 export function getBatchCliExecutorPath(): string {
-    const candidates = [
-        path.resolve(__dirname, '../src/php-adapter/batch-cli-executor.php'),
-        path.resolve(__dirname, '../../php-adapter/batch-cli-executor.php'),
-        path.resolve(__dirname, './src/php-adapter/batch-cli-executor.php'),
-        path.resolve(__dirname, 'php-adapter/batch-cli-executor.php')
-    ];
-    const found = resolveExistingPath(candidates);
-    return found ?? path.resolve(__dirname, '../src/php-adapter/batch-cli-executor.php');
+    return resolveAdapterScript('batch-cli-executor.php');
 }
 
 /**
@@ -74,7 +60,7 @@ function applyStreamItem(item: BatchStreamItem | null, result: BatchExecutionRes
         result.signatures.set(item.serviceName, normalizeWebserviceSignature(item.signature));
         return;
     }
-    result.errors.set(item.serviceName, item.error);
+    result.errors.set(item.serviceName, { code: resolveErrorCode({ code: item.errorCode }), message: item.error });
 }
 
 /**
@@ -83,13 +69,13 @@ function applyStreamItem(item: BatchStreamItem | null, result: BatchExecutionRes
  * @param {BatchExecutionResult} result - Accumulator.
  * @param {number} total - Total items.
  * @param {string} serviceName - Completed service name.
- * @param {((completed: number, total: number, serviceName?: string) => void)} [onProgress] - Listener.
+ * @param {BatchProgressListener} [onProgress] - Listener.
  */
 function notifyStreamProgress(
     result: BatchExecutionResult,
     total: number,
     serviceName: string,
-    onProgress?: (completed: number, total: number, serviceName?: string) => void
+    onProgress?: BatchProgressListener
 ): void {
     if (!onProgress) {
         return;
@@ -104,13 +90,13 @@ function notifyStreamProgress(
  * @param {string} line - Raw line string.
  * @param {BatchExecutionResult} result - Results accumulator.
  * @param {number} [total] - Total batch items.
- * @param {((completed: number, total: number, serviceName?: string) => void)} [onProgress] - Progress callback.
+ * @param {BatchProgressListener} [onProgress] - Progress callback.
  */
 function handleIncomingLine(
     line: string,
     result: BatchExecutionResult,
     total?: number,
-    onProgress?: (completed: number, total: number, serviceName?: string) => void
+    onProgress?: BatchProgressListener
 ): void {
     const item = parseStreamLine(line);
     applyStreamItem(item, result);
@@ -223,83 +209,158 @@ function handleExitCrash(
     const fatal = parseFatalError(stderr);
     const failedName = extractCrashedServiceName(fatal, pending);
     if (failedName) {
-        result.errors.set(failedName, resolveCrashMessage(fatal, code, stderr));
+        result.errors.set(failedName, {
+            code: resolveErrorCode({ code: fatal?.errorCode }),
+            message: resolveCrashMessage(fatal, code, stderr)
+        });
     }
     result.uncompleted = computeUncompletedItems(items, result);
 }
 
 /**
  * Pipes JSON serialized batch items to child process stdin stream.
+ * Write errors (e.g. EPIPE when PHP dies early) are swallowed; the close handler reports the crash.
  *
  * @param {ChildProcess} child - Child process instance.
  * @param {BatchServiceItem[]} items - Services payload.
  */
 function pipeBatchInput(child: ChildProcess, items: BatchServiceItem[]): void {
-    const payload = JSON.stringify(items);
-    child.stdin?.write(payload, 'utf-8', () => {
-        child.stdin?.end();
-    });
+    child.stdin?.on('error', () => {});
+    child.stdin?.end(JSON.stringify(items), 'utf-8');
 }
 
 /**
- * Sets up watchdog timer to abort unresponsive child process.
+ * Terminates a child process, escalating to SIGKILL if it does not exit promptly.
+ *
+ * @param {ChildProcess} child - Child process to terminate.
+ */
+function terminateChild(child: ChildProcess): void {
+    child.kill('SIGTERM');
+    setTimeout(() => child.kill('SIGKILL'), 300).unref();
+}
+
+/**
+ * Creates an inactivity watchdog: it fires only when no service completes within timeoutMs.
  *
  * @param {ChildProcess} child - Active child process.
- * @param {number} timeoutMs - Max duration in ms.
- * @param {() => void} onTimeout - Callback when timed out.
- * @returns {NodeJS.Timeout} Active timer handle.
+ * @param {number} timeoutMs - Max idle duration in ms between completed services.
+ * @param {BatchProcessState} state - Shared process state.
+ * @returns {IdleWatchdog} Watchdog controller.
  */
-function setupWatchdog(
-    child: ChildProcess,
-    timeoutMs: number,
-    onTimeout: () => void
-): NodeJS.Timeout {
-    return setTimeout(() => {
-        onTimeout();
-        child.kill('SIGTERM');
-        setTimeout(() => child.kill('SIGKILL'), 300);
-    }, timeoutMs);
+function createIdleWatchdog(child: ChildProcess, timeoutMs: number, state: BatchProcessState): IdleWatchdog {
+    let timer: NodeJS.Timeout | null = null;
+    const arm = (): void => {
+        timer = setTimeout(() => {
+            state.timedOut = true;
+            terminateChild(child);
+        }, timeoutMs);
+    };
+    const clear = (): void => {
+        if (timer) {
+            clearTimeout(timer);
+        }
+    };
+    arm();
+    return {
+        reset: () => {
+            clear();
+            arm();
+        },
+        clear
+    };
 }
 
 /**
- * Marks all pending items as failed on process timeout.
+ * Marks every pending item as failed when the PHP runner could not be started.
  *
+ * @param {Error} error - Spawn error.
  * @param {BatchServiceItem[]} items - Service items.
  * @param {BatchExecutionResult} result - Accumulator.
  */
-function handleTimeoutFailure(items: BatchServiceItem[], result: BatchExecutionResult): void {
-    const pending = computeUncompletedItems(items, result);
-    for (const item of pending) {
-        result.errors.set(item.serviceName, 'Execution timed out');
+function handleSpawnFailure(error: Error, items: BatchServiceItem[], result: BatchExecutionResult): void {
+    for (const item of computeUncompletedItems(items, result)) {
+        result.errors.set(item.serviceName, {
+            code: 'INTROSPECTION_FAILED',
+            message: `Failed to start PHP batch runner: ${error.message}`
+        });
     }
     result.uncompleted = [];
 }
 
 /**
- * Handles close event of the batch child process.
+ * Marks the stalled service as timed out and queues the remaining ones for isolated fallback.
+ *
+ * @param {number} timeoutMs - Idle timeout that elapsed.
+ * @param {BatchServiceItem[]} items - Service items.
+ * @param {BatchExecutionResult} result - Accumulator.
+ */
+function handleIdleTimeout(timeoutMs: number, items: BatchServiceItem[], result: BatchExecutionResult): void {
+    const stalled = getFirstPendingName(computeUncompletedItems(items, result));
+    if (stalled) {
+        result.errors.set(stalled, {
+            code: 'INTROSPECTION_FAILED',
+            message: `Execution timed out after ${timeoutMs} ms without progress`
+        });
+    }
+    result.uncompleted = computeUncompletedItems(items, result);
+}
+
+/**
+ * Handles spawn failures and idle timeouts.
+ *
+ * @param {BatchProcessState} state - Process state.
+ * @param {BatchServiceItem[]} items - Service items.
+ * @param {BatchExecutionResult} result - Accumulator.
+ * @returns {boolean} True if the process was aborted and has been handled.
+ */
+function handleAbortedProcess(
+    state: BatchProcessState,
+    items: BatchServiceItem[],
+    result: BatchExecutionResult
+): boolean {
+    if (state.spawnError) {
+        handleSpawnFailure(state.spawnError, items, result);
+        return true;
+    }
+    if (state.timedOut) {
+        handleIdleTimeout(state.timeoutMs, items, result);
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Handles termination of the batch child process.
  *
  * @param {number | null} code - Exit code.
- * @param {string} stderr - Stderr content.
- * @param {boolean} timedOut - Whether process timed out.
+ * @param {BatchProcessState} state - Process state.
  * @param {BatchServiceItem[]} items - Items array.
  * @param {BatchExecutionResult} result - Result object.
  */
 function handleProcessClose(
     code: number | null,
-    stderr: string,
-    timedOut: boolean,
+    state: BatchProcessState,
     items: BatchServiceItem[],
     result: BatchExecutionResult
 ): void {
-    if (timedOut) {
-        handleTimeoutFailure(items, result);
+    if (handleAbortedProcess(state, items, result)) {
         return;
     }
     if (code !== 0) {
-        handleExitCrash(code, stderr, items, result);
+        handleExitCrash(code, state.stderr, items, result);
         return;
     }
     result.uncompleted = computeUncompletedItems(items, result);
+}
+
+/**
+ * Creates the initial mutable state of a batch process run.
+ *
+ * @param {number} timeoutMs - Idle timeout in ms.
+ * @returns {BatchProcessState} Fresh state.
+ */
+function createProcessState(timeoutMs: number): BatchProcessState {
+    return { stderr: '', timedOut: false, spawnError: null, settled: false, timeoutMs };
 }
 
 /**
@@ -307,50 +368,55 @@ function handleProcessClose(
  *
  * @param {BatchServiceItem[]} items - Service payloads.
  * @param {string} moodlePath - Moodle root path.
- * @param {number} timeoutMs - Execution timeout.
+ * @param {number} timeoutMs - Idle timeout between completed services.
+ * @param {BatchProgressListener} [onProgress] - Progress listener.
+ * @param {BatchExtractionOptions} [options] - Runtime options.
  * @returns {Promise<BatchExecutionResult>} Extraction result.
  */
 async function runBatchProcess(
     items: BatchServiceItem[],
     moodlePath: string,
     timeoutMs: number,
-    onProgress?: (completed: number, total: number, serviceName?: string) => void
+    onProgress?: BatchProgressListener,
+    options?: BatchExtractionOptions
 ): Promise<BatchExecutionResult> {
     const binary = await getPhpBinary();
-    const executorPath = getBatchCliExecutorPath();
-    const result: BatchExecutionResult = {
-        signatures: new Map(),
-        errors: new Map(),
-        uncompleted: []
-    };
+    const result = createEmptyBatchResult();
+    const state = createProcessState(timeoutMs);
 
     return new Promise((resolve) => {
-        const child = spawn(binary, [executorPath, '--moodle-root', moodlePath], {
-            stdio: ['pipe', 'pipe', 'pipe']
+        const child = spawn(binary, [getBatchCliExecutorPath(), '--moodle-root', moodlePath], {
+            stdio: ['pipe', 'pipe', 'pipe'],
+            env: buildPhpEnv(options?.dataroot)
         });
+        const watchdog = createIdleWatchdog(child, timeoutMs, state);
+        const rl = readline.createInterface({ input: child.stdout! });
 
-        let stderr = '';
-        let timedOut = false;
+        const finalize = (code: number | null): void => {
+            if (state.settled) {
+                return;
+            }
+            state.settled = true;
+            watchdog.clear();
+            rl.close();
+            handleProcessClose(code, state, items, result);
+            resolve(result);
+        };
 
-        const timer = setupWatchdog(child, timeoutMs, () => {
-            timedOut = true;
+        rl.on('line', (line) => {
+            watchdog.reset();
+            handleIncomingLine(line, result, items.length, onProgress);
         });
-
-        const rl = readline.createInterface({ input: child.stdout });
-        rl.on('line', (line) => handleIncomingLine(line, result, items.length, onProgress));
-
         child.stderr?.on('data', (chunk) => {
-            stderr += chunk.toString();
+            state.stderr += chunk.toString();
         });
+        child.on('error', (err) => {
+            state.spawnError = err;
+            finalize(null);
+        });
+        child.on('close', (code) => finalize(code));
 
         pipeBatchInput(child, items);
-
-        child.on('close', (code) => {
-            clearTimeout(timer);
-            rl.close();
-            handleProcessClose(code, stderr, timedOut, items, result);
-            resolve(result);
-        });
     });
 }
 
@@ -368,31 +434,52 @@ function formatFallbackError(err: unknown): string {
 }
 
 /**
+ * Builds the single-service extraction payload for a batch item.
+ *
+ * @param {BatchServiceItem} item - Service item.
+ * @param {string} moodlePath - Root path.
+ * @param {BatchExtractionOptions} [options] - Runtime options.
+ * @returns {SignatureExtractionPayload} Extraction payload.
+ */
+function buildFallbackPayload(
+    item: BatchServiceItem,
+    moodlePath: string,
+    options?: BatchExtractionOptions
+): SignatureExtractionPayload {
+    return {
+        moodlePath,
+        classFile: item.classFile,
+        classname: item.classname,
+        methodname: item.methodname,
+        dataroot: options?.dataroot
+    };
+}
+
+/**
  * Executes isolated fallback extraction for a single service item.
  *
  * @param {BatchServiceItem} item - Service item.
  * @param {string} moodlePath - Root path.
  * @param {BatchExecutionResult} result - Target result accumulator.
  * @param {number} [total] - Total batch items count.
- * @param {((completed: number, total: number, serviceName?: string) => void)} [onProgress] - Progress listener.
+ * @param {BatchProgressListener} [onProgress] - Progress listener.
+ * @param {BatchExtractionOptions} [options] - Runtime options.
+ * @param {number} [timeoutMs] - Per-service timeout.
  */
 async function runSingleFallback(
     item: BatchServiceItem,
     moodlePath: string,
     result: BatchExecutionResult,
     total?: number,
-    onProgress?: (completed: number, total: number, serviceName?: string) => void
+    onProgress?: BatchProgressListener,
+    options?: BatchExtractionOptions,
+    timeoutMs?: number
 ): Promise<void> {
     try {
-        const sig = await extractWebserviceSignature({
-            moodlePath,
-            classFile: item.classFile,
-            classname: item.classname,
-            methodname: item.methodname
-        });
+        const sig = await extractWebserviceSignature(buildFallbackPayload(item, moodlePath, options), timeoutMs);
         result.signatures.set(item.serviceName, sig);
     } catch (err) {
-        result.errors.set(item.serviceName, formatFallbackError(err));
+        result.errors.set(item.serviceName, { code: resolveErrorCode(err), message: formatFallbackError(err) });
     }
     if (total) {
         notifyStreamProgress(result, total, item.serviceName, onProgress);
@@ -400,26 +487,28 @@ async function runSingleFallback(
 }
 
 /**
- * Resolves any uncompleted items using isolated single-service extraction.
+ * Resolves any uncompleted items using isolated single-service extraction with bounded concurrency.
  *
  * @param {BatchServiceItem[]} uncompleted - Uncompleted items list.
  * @param {string} moodlePath - Moodle root path.
  * @param {BatchExecutionResult} result - Target result map.
- * @param {number} [total] - Total batch items count.
- * @param {((completed: number, total: number, serviceName?: string) => void)} [onProgress] - Progress listener.
+ * @param {number} timeoutMs - Per-service timeout.
+ * @param {BatchProgressListener} [onProgress] - Progress listener.
+ * @param {BatchExtractionOptions} [options] - Runtime options.
  */
 async function resolveUncompletedViaFallback(
     uncompleted: BatchServiceItem[],
     moodlePath: string,
     result: BatchExecutionResult,
-    total?: number,
-    onProgress?: (completed: number, total: number, serviceName?: string) => void
+    timeoutMs: number,
+    onProgress?: BatchProgressListener,
+    options?: BatchExtractionOptions
 ): Promise<void> {
-    if (uncompleted.length === 0) {
-        return;
-    }
-    const tasks = uncompleted.map((item) => runSingleFallback(item, moodlePath, result, total, onProgress));
-    await Promise.all(tasks);
+    const total = result.signatures.size + result.errors.size + uncompleted.length;
+    const limit = normalizeConcurrency(options?.concurrency, DEFAULT_FALLBACK_CONCURRENCY);
+    await runWithConcurrency(uncompleted, limit, (item) =>
+        runSingleFallback(item, moodlePath, result, total, onProgress, options, timeoutMs)
+    );
     result.uncompleted = [];
 }
 
@@ -437,78 +526,25 @@ function createEmptyBatchResult(): BatchExecutionResult {
 }
 
 /**
- * Detects if extractWebserviceSignature has been mocked in the test environment.
- *
- * @returns {boolean} True if mocked.
- */
-function isExtractorMocked(): boolean {
-    const fn = extractWebserviceSignature as unknown as { _isMockFunction?: boolean; mock?: unknown };
-    return Boolean(fn._isMockFunction || fn.mock);
-}
-
-/**
- * Extracts batch items sequentially through the mocked extractor.
- *
- * @param {BatchServiceItem[]} items - Items list.
- * @param {string} moodlePath - Moodle root path.
- * @param {((completed: number, total: number, serviceName?: string) => void)} [onProgress] - Progress listener.
- * @returns {Promise<BatchExecutionResult>} Result container.
- */
-async function extractMockedSignatures(
-    items: BatchServiceItem[],
-    moodlePath: string,
-    onProgress?: (completed: number, total: number, serviceName?: string) => void
-): Promise<BatchExecutionResult> {
-    const result: BatchExecutionResult = {
-        signatures: new Map(),
-        errors: new Map(),
-        uncompleted: []
-    };
-    for (const item of items) {
-        await runSingleFallback(item, moodlePath, result, items.length, onProgress);
-    }
-    return result;
-}
-
-/**
  * Executes batch runner process and executes isolated fallback if any uncompleted items remain.
  *
  * @param {BatchServiceItem[]} items - Items to extract.
  * @param {string} moodlePath - Moodle root path.
- * @param {number} timeoutMs - Watchdog timeout in ms.
- * @param {((completed: number, total: number, serviceName?: string) => void)} [onProgress] - Progress listener.
+ * @param {number} timeoutMs - Idle watchdog timeout in ms.
+ * @param {BatchProgressListener} [onProgress] - Progress listener.
+ * @param {BatchExtractionOptions} [options] - Runtime options.
  * @returns {Promise<BatchExecutionResult>} Result container.
  */
 async function processBatchAndFallback(
     items: BatchServiceItem[],
     moodlePath: string,
     timeoutMs: number,
-    onProgress?: (completed: number, total: number, serviceName?: string) => void
+    onProgress?: BatchProgressListener,
+    options?: BatchExtractionOptions
 ): Promise<BatchExecutionResult> {
-    const result = await runBatchProcess(items, moodlePath, timeoutMs, onProgress);
-    await resolveUncompletedViaFallback(result.uncompleted, moodlePath, result, items.length, onProgress);
+    const result = await runBatchProcess(items, moodlePath, timeoutMs, onProgress, options);
+    await resolveUncompletedViaFallback(result.uncompleted, moodlePath, result, timeoutMs, onProgress, options);
     return result;
-}
-
-/**
- * Dispatches batch extraction to mock adapter or live child process runner.
- *
- * @param {BatchServiceItem[]} items - Items to extract.
- * @param {string} moodlePath - Moodle root path.
- * @param {number} timeoutMs - Watchdog timeout in ms.
- * @param {((completed: number, total: number, serviceName?: string) => void)} [onProgress] - Progress listener.
- * @returns {Promise<BatchExecutionResult>} Result container.
- */
-async function dispatchBatchExtraction(
-    items: BatchServiceItem[],
-    moodlePath: string,
-    timeoutMs: number,
-    onProgress?: (completed: number, total: number, serviceName?: string) => void
-): Promise<BatchExecutionResult> {
-    if (isExtractorMocked()) {
-        return extractMockedSignatures(items, moodlePath, onProgress);
-    }
-    return processBatchAndFallback(items, moodlePath, timeoutMs, onProgress);
 }
 
 /**
@@ -516,18 +552,20 @@ async function dispatchBatchExtraction(
  *
  * @param {BatchServiceItem[]} items - List of resolved service items.
  * @param {string} moodlePath - Root directory path of Moodle instance.
- * @param {number} [timeoutMs=15000] - Max duration before terminating batch process.
- * @param {((completed: number, total: number, serviceName?: string) => void)} [onProgress] - Optional progress listener.
+ * @param {number} [timeoutMs=15000] - Max idle time without a completed service before the batch process is aborted.
+ * @param {BatchProgressListener} [onProgress] - Optional progress listener.
+ * @param {BatchExtractionOptions} [options] - Runtime options (dataroot, fallback concurrency).
  * @returns {Promise<BatchExecutionResult>} Consolidated extraction result.
  */
 export async function extractBatchSignatures(
     items: BatchServiceItem[],
     moodlePath: string,
     timeoutMs = 15000,
-    onProgress?: (completed: number, total: number, serviceName?: string) => void
+    onProgress?: BatchProgressListener,
+    options?: BatchExtractionOptions
 ): Promise<BatchExecutionResult> {
     if (items.length === 0) {
         return createEmptyBatchResult();
     }
-    return dispatchBatchExtraction(items, moodlePath, timeoutMs, onProgress);
+    return processBatchAndFallback(items, moodlePath, timeoutMs, onProgress, options);
 }
