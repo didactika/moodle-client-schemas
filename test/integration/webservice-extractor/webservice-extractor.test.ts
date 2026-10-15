@@ -4,13 +4,34 @@ import * as Scanner from '../../../src/webservice-extractor/scanner/scanner';
 import * as AstManager from '../../../src/webservice-extractor/cache/ast-manager';
 import * as ServiceExtractor from '../../../src/webservice-extractor/extractor/service-extractor';
 import * as ClassResolver from '../../../src/webservice-extractor/resolver/class-resolver';
-import * as PhpSignatureExtractor from '../../../src/webservice-extractor/adapter/php-signature-extractor';
+import * as BatchExtractor from '../../../src/webservice-extractor/adapter/batch-signature-extractor';
+import {
+    BatchServiceItem,
+    BatchProgressListener,
+    ExtractionFailure
+} from '../../../src/webservice-extractor/interfaces/batch.interfaces';
 
 jest.mock('../../../src/webservice-extractor/scanner/scanner');
 jest.mock('../../../src/webservice-extractor/cache/ast-manager');
 jest.mock('../../../src/webservice-extractor/extractor/service-extractor');
 jest.mock('../../../src/webservice-extractor/resolver/class-resolver');
-jest.mock('../../../src/webservice-extractor/adapter/php-signature-extractor');
+jest.mock('../../../src/webservice-extractor/adapter/batch-signature-extractor');
+
+/**
+ * Stubs the batch extractor with a fixed outcome, reporting progress for every dispatched item.
+ */
+function mockBatchOutcome(
+    signatures: Record<string, unknown> = {},
+    errors: Record<string, ExtractionFailure> = {}
+): void {
+    (BatchExtractor.extractBatchSignatures as jest.Mock).mockImplementation(
+        async (items: BatchServiceItem[], _moodlePath: string, _timeout: number, onProgress?: BatchProgressListener) => {
+            items.forEach((item, index) => onProgress?.(index + 1, items.length, item.serviceName));
+            return { signatures: new Map(Object.entries(signatures)), errors: new Map(Object.entries(errors)), uncompleted: [] };
+        }
+    );
+}
+
 
 describe('Integration Flow: extractWebservice (Functional Pipeline)', () => {
 
@@ -45,7 +66,7 @@ describe('Integration Flow: extractWebservice (Functional Pipeline)', () => {
             parameters: { keys: { courseid: { type: 'int' } } },
             returns: { keys: { items: { type: 'array' } } }
         };
-        (PhpSignatureExtractor.extractWebserviceSignature as jest.Mock).mockResolvedValue(mockSignature);
+        mockBatchOutcome({ mod_sample_get_items: mockSignature });
 
         const { schemas, errors } = await extractWebservice({
             moodlePath,
@@ -56,12 +77,18 @@ describe('Integration Flow: extractWebservice (Functional Pipeline)', () => {
         expect(AstManager.getAst).toHaveBeenCalledWith('./test/fixtures/mock_moodle/mod/sample/db/services.php', moodlePath);
         expect(ServiceExtractor.extractServices).toHaveBeenCalledWith(mockServicesAst);
         expect(ClassResolver.resolveClass).toHaveBeenCalledWith(mockService, moodlePath);
-        expect(PhpSignatureExtractor.extractWebserviceSignature).toHaveBeenCalledWith({
+        expect(BatchExtractor.extractBatchSignatures).toHaveBeenCalledWith(
+            [{
+                serviceName: 'mod_sample_get_items',
+                classFile: 'mod/sample/classes/external/sample_service_with_exporter.php',
+                classname: 'test_fixtures\\external\\sample_service_with_exporter',
+                methodname: 'get_items'
+            }],
             moodlePath,
-            classFile: 'mod/sample/classes/external/sample_service_with_exporter.php',
-            classname: 'test_fixtures\\external\\sample_service_with_exporter',
-            methodname: 'get_items'
-        });
+            15000,
+            undefined,
+            { dataroot: expect.any(String), concurrency: 8 }
+        );
 
         expect(errors).toHaveLength(0);
         expect(schemas).toEqual([
@@ -89,7 +116,8 @@ describe('Integration Flow: extractWebservice (Functional Pipeline)', () => {
 
         const { schemas, errors } = await extractWebservice({ moodlePath });
 
-        expect(PhpSignatureExtractor.extractWebserviceSignature).not.toHaveBeenCalled();
+        const dispatched = (BatchExtractor.extractBatchSignatures as jest.Mock).mock.calls.flatMap((call) => call[0]);
+        expect(dispatched).toEqual([]);
         expect(schemas).toHaveLength(0);
         expect(errors).toHaveLength(1);
         expect(errors[0].code).toBe('CLASS_NOT_FOUND');
@@ -109,10 +137,7 @@ describe('Integration Flow: extractWebservice (Functional Pipeline)', () => {
             methodname: 'execute'
         }]);
         (ClassResolver.resolveClass as jest.Mock).mockResolvedValue('sample.php');
-        (PhpSignatureExtractor.extractWebserviceSignature as jest.Mock).mockResolvedValue({
-            parameters: { keys: {} },
-            returns: { keys: {} }
-        });
+        mockBatchOutcome({ mod_sample_service: { parameters: { keys: {} }, returns: { keys: {} } } });
 
         const progressUpdates: unknown[] = [];
         const resultWithCallback = await extractWebservice({

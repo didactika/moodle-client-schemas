@@ -1,32 +1,20 @@
-import fs from 'fs';
-import path from 'path';
 import { execFile } from 'child_process';
 import {
     WebserviceSignature,
     SignatureExtractionPayload,
     JsonErrorPayload,
+    PhpProcessFailure,
     WebServiceReturnSchema,
     WebServiceParametersSchema
 } from '../interfaces/signature.interfaces';
 import { getPhpBinary } from './php-runtime';
+import { resolveAdapterScript } from './script-locator';
 import { sanitizeDescription } from '../utils/description-utils';
 import { resolvePrimitiveType } from '../utils/type-utils';
+import { resolveErrorCode } from '../utils/error-code-utils';
+import { SignatureExtractionError } from './signature-extraction-error';
+import { WebServiceErrorCode } from '../interfaces/schema-extractor.interfaces';
 export { sanitizeDescription, resolvePrimitiveType };
-
-/**
- * Evaluates candidate file paths and returns the first existing path.
- *
- * @param {string[]} candidates - Array of candidate file paths.
- * @returns {string | null} First existing path or null.
- */
-function findExistingCandidate(candidates: string[]): string | null {
-    for (const candidate of candidates) {
-        if (fs.existsSync(candidate)) {
-            return candidate;
-        }
-    }
-    return null;
-}
 
 /**
  * Resolves the absolute path to cli-executor.php across development and compiled dist/ bundles.
@@ -34,14 +22,7 @@ function findExistingCandidate(candidates: string[]): string | null {
  * @returns {string} Absolute path to cli-executor.php.
  */
 export function getCliExecutorPath(): string {
-    const candidates = [
-        path.resolve(__dirname, '../src/php-adapter/cli-executor.php'),
-        path.resolve(__dirname, '../../php-adapter/cli-executor.php'),
-        path.resolve(__dirname, './src/php-adapter/cli-executor.php'),
-        path.resolve(__dirname, 'php-adapter/cli-executor.php')
-    ];
-    const found = findExistingCandidate(candidates);
-    return found ?? path.resolve(__dirname, '../src/php-adapter/cli-executor.php');
+    return resolveAdapterScript('cli-executor.php');
 }
 
 /**
@@ -294,62 +275,64 @@ function appendErrorLocation(msg: string, file?: string, line?: number): string 
 /**
  * Formats structured error payload with source file and line if available.
  *
- * @param {JsonErrorPayload} parsed - Parsed error object.
- * @returns {string | null} Formatted message.
+ * @param {JsonErrorPayload} parsed - Parsed error object carrying an error message.
+ * @returns {string} Formatted message.
  */
-function formatJsonError(parsed: JsonErrorPayload): string | null {
-    if (!parsed.error) {
-        return null;
-    }
-    return appendErrorLocation(parsed.error, parsed.file, parsed.line);
+function formatJsonError(parsed: JsonErrorPayload): string {
+    return appendErrorLocation(parsed.error as string, parsed.file, parsed.line);
 }
 
 /**
- * Parses JSON error payload candidate and returns formatted message or null.
+ * Checks whether a parsed payload carries an error message.
+ *
+ * @param {JsonErrorPayload | null} parsed - Parsed JSON value.
+ * @returns {boolean} True if an error message is present.
+ */
+function hasErrorMessage(parsed: JsonErrorPayload | null): parsed is JsonErrorPayload {
+    return Boolean(parsed?.error);
+}
+
+/**
+ * Parses a JSON error payload candidate, keeping it only when it carries an error message.
  *
  * @param {string} candidate - Potential JSON string.
- * @returns {string | null} Formatted message or null.
+ * @returns {JsonErrorPayload | null} Parsed payload or null.
  */
-function parseJsonCandidate(candidate: string): string | null {
+function parseJsonCandidate(candidate: string): JsonErrorPayload | null {
     try {
-        const parsed = JSON.parse(candidate) as JsonErrorPayload;
-        return formatJsonError(parsed);
+        const parsed = JSON.parse(candidate) as JsonErrorPayload | null;
+        return hasErrorMessage(parsed) ? parsed : null;
     } catch {
         return null;
     }
 }
 
 /**
- * Extracts and parses embedded JSON string from stderr text.
+ * Extracts and parses an embedded JSON payload from stderr text.
  *
  * @param {string} stderr - Raw stderr string.
- * @returns {string | null} Parsed error message or null.
+ * @returns {JsonErrorPayload | null} Parsed payload or null.
  */
-function extractEmbeddedJson(stderr: string): string | null {
+function extractEmbeddedJson(stderr: string): JsonErrorPayload | null {
     const firstBrace = stderr.indexOf('{');
     const lastBrace = stderr.lastIndexOf('}');
     if (firstBrace === -1 || lastBrace <= firstBrace) {
         return null;
     }
-    const candidate = stderr.slice(firstBrace, lastBrace + 1);
-    return parseJsonCandidate(candidate);
+    return parseJsonCandidate(stderr.slice(firstBrace, lastBrace + 1));
 }
 
 /**
- * Safely extracts error description from structured JSON stderr output.
+ * Safely extracts the structured JSON error payload written to stderr by the PHP adapter.
  *
- * @param {string} stderr - Raw stderr string.
- * @returns {string | null} Extracted error message or null.
+ * @param {string} [stderr] - Raw stderr string.
+ * @returns {JsonErrorPayload | null} Parsed payload or null.
  */
-function extractJsonErrorMessage(stderr: string): string | null {
+function extractJsonErrorPayload(stderr?: string): JsonErrorPayload | null {
     if (!stderr) {
         return null;
     }
-    const directParsed = parseJsonCandidate(stderr.trim());
-    if (directParsed) {
-        return directParsed;
-    }
-    return extractEmbeddedJson(stderr);
+    return parseJsonCandidate(stderr.trim()) ?? extractEmbeddedJson(stderr);
 }
 
 /**
@@ -359,17 +342,17 @@ function extractJsonErrorMessage(stderr: string): string | null {
  * @returns {string} Clean error string.
  */
 function formatStderrError(stderr: string): string {
-    const jsonMsg = extractJsonErrorMessage(stderr);
-    return jsonMsg ? jsonMsg : stderr.trim();
+    const payload = extractJsonErrorPayload(stderr);
+    return payload ? formatJsonError(payload) : stderr.trim();
 }
 
 /**
  * Extracts base error message from raw error object.
  *
- * @param {{ stderr?: string; message?: string }} err - Raw error object.
+ * @param {PhpProcessFailure} err - Raw error object.
  * @returns {string} Clean base error.
  */
-function extractRawErrorMessage(err: { stderr?: string; message?: string }): string {
+function extractRawErrorMessage(err: PhpProcessFailure): string {
     if (err.stderr) {
         return formatStderrError(err.stderr);
     }
@@ -378,16 +361,41 @@ function extractRawErrorMessage(err: { stderr?: string; message?: string }): str
 
 /**
  * Formats a clean error message from PHP adapter execution failure.
+ * execFile reports its own timeout by killing the child, not through an errno.
  *
- * @param {unknown} error - Raw execution error.
+ * @param {PhpProcessFailure} err - Raw execution error.
  * @returns {string} Formatted error message.
  */
-function formatPhpError(error: unknown): string {
-    const err = error as { code?: string | number; stderr?: string; message?: string };
-    if (err.code === 'ETIMEDOUT') {
+function formatPhpError(err: PhpProcessFailure): string {
+    if (err.killed) {
         return 'Execution timed out';
     }
     return extractRawErrorMessage(err);
+}
+
+/**
+ * Resolves the structured error code of a PHP adapter failure: the code reported by PHP wins,
+ * then Node.js errnos (e.g. EACCES); timeouts and unknown failures are introspection failures.
+ *
+ * @param {PhpProcessFailure} err - Raw execution error.
+ * @returns {WebServiceErrorCode} Structured error code.
+ */
+function resolvePhpErrorCode(err: PhpProcessFailure): WebServiceErrorCode {
+    const payload = extractJsonErrorPayload(err.stderr);
+    if (payload?.errorCode) {
+        return resolveErrorCode({ code: payload.errorCode });
+    }
+    return resolveErrorCode(err);
+}
+
+/**
+ * Normalizes a thrown value into a PHP process failure description.
+ *
+ * @param {unknown} error - Thrown value.
+ * @returns {PhpProcessFailure} Failure description.
+ */
+function toPhpProcessFailure(error: unknown): PhpProcessFailure {
+    return (error ?? {}) as PhpProcessFailure;
 }
 
 /**
@@ -408,16 +416,30 @@ function handleProcessError(
 }
 
 /**
+ * Builds the PHP process environment, exporting the per-run scratch dataroot when provided.
+ *
+ * @param {string} [dataroot] - Scratch dataroot directory.
+ * @returns {NodeJS.ProcessEnv} Process environment.
+ */
+export function buildPhpEnv(dataroot?: string): NodeJS.ProcessEnv {
+    if (!dataroot) {
+        return process.env;
+    }
+    return { ...process.env, MOODLE_SCHEMAS_DATAROOT: dataroot };
+}
+
+/**
  * Executes PHP CLI command asynchronously and returns standard output string.
  *
  * @param {string[]} args - Process arguments.
  * @param {number} timeoutMs - Execution timeout.
+ * @param {NodeJS.ProcessEnv} env - Process environment.
  * @returns {Promise<string>} Output string from stdout.
  */
-async function executePhpCli(args: string[], timeoutMs: number): Promise<string> {
+async function executePhpCli(args: string[], timeoutMs: number, env: NodeJS.ProcessEnv): Promise<string> {
     const binary = await getPhpBinary();
     return new Promise((resolve, reject) => {
-        execFile(binary, args, { timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024 }, (error, stdout, stderr) => {
+        execFile(binary, args, { timeout: timeoutMs, maxBuffer: 10 * 1024 * 1024, env }, (error, stdout, stderr) => {
             if (error) {
                 handleProcessError(error, stderr, reject);
                 return;
@@ -443,7 +465,7 @@ async function executePhpCli(args: string[], timeoutMs: number): Promise<string>
  * @param {SignatureExtractionPayload} payload - Service metadata payload.
  * @param {number} [timeoutMs=5000] - Max execution timeout in ms.
  * @returns {Promise<WebserviceSignature>} Extracted structured signature.
- * @throws {Error} When PHP runner fails or times out.
+ * @throws {SignatureExtractionError} When PHP runner fails or times out (carries a structured error code).
  */
 export async function extractWebserviceSignature(
     payload: SignatureExtractionPayload,
@@ -452,10 +474,13 @@ export async function extractWebserviceSignature(
     const args = buildCliArgs(payload);
 
     try {
-        const stdout = await executePhpCli(args, timeoutMs);
+        const stdout = await executePhpCli(args, timeoutMs, buildPhpEnv(payload.dataroot));
         return parsePhpOutput(stdout);
     } catch (error: unknown) {
-        const details = formatPhpError(error);
-        throw new Error(`PHP Signature Extraction failed: ${details}`);
+        const failure = toPhpProcessFailure(error);
+        throw new SignatureExtractionError(
+            `PHP Signature Extraction failed: ${formatPhpError(failure)}`,
+            resolvePhpErrorCode(failure)
+        );
     }
 }

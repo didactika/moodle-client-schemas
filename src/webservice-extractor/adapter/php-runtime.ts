@@ -1,15 +1,15 @@
 import { execFile } from 'child_process';
-import fs from 'fs/promises';
 import { WebServiceExtractionError } from '../interfaces/schema-extractor.interfaces';
 
 let customPhpBinary: string | null = null;
 let cachedSystemPhpBinary: string | null = null;
-let temporaryRuntimeDir: string | null = null;
 
 export interface PhpValidationResult {
     valid: boolean;
     error?: WebServiceExtractionError;
     binaryPath?: string;
+    /** Detected PHP version encoded as major * 100 + minor (e.g. 804 for PHP 8.4). */
+    version?: number;
 }
 
 /**
@@ -30,16 +30,13 @@ function parsePhpVersion(stdout: string): { major: number; minor: number } | nul
 }
 
 /**
- * Checks if the parsed version satisfies PHP >= 7.4.
+ * Checks if the parsed version satisfies PHP >= 8.0 (the sandbox relies on PHP 8 string functions).
  *
  * @param {{ major: number; minor: number }} version - Version object.
  * @returns {boolean} True if supported.
  */
 function isCompatiblePhpVersion(version: { major: number; minor: number }): boolean {
-    if (version.major > 7) {
-        return true;
-    }
-    return version.major === 7 && version.minor >= 4;
+    return version.major >= 8;
 }
 
 /**
@@ -72,7 +69,7 @@ function createUnsupportedVersionError(version: { major: number; minor: number }
         valid: false,
         error: {
             code: 'PHP_VERSION_UNSUPPORTED',
-            message: `Unsupported PHP version detected (${detected}). Moodle schema extraction requires PHP 7.4 or higher. Please upgrade your PHP installation.`
+            message: `Unsupported PHP version detected (${detected}). Moodle schema extraction requires PHP 8.0 or higher. Please upgrade your PHP installation.`
         }
     };
 }
@@ -89,7 +86,7 @@ function evaluatePhpBanner(output: string, binary: string): PhpValidationResult 
     if (!version || !isCompatiblePhpVersion(version)) {
         return createUnsupportedVersionError(version);
     }
-    return { valid: true, binaryPath: binary };
+    return { valid: true, binaryPath: binary, version: version.major * 100 + version.minor };
 }
 
 /**
@@ -105,7 +102,7 @@ export async function validatePhpRuntime(): Promise<PhpValidationResult> {
             valid: false,
             error: {
                 code: 'PHP_NOT_FOUND',
-                message: 'PHP CLI was not found on your system PATH. Please install PHP (>= 7.4) and ensure "php" is executable.'
+                message: 'PHP CLI was not found on your system PATH. Please install PHP (>= 8.0) and ensure "php" is executable.'
             }
         };
     }
@@ -138,7 +135,7 @@ export function setPhpBinaryPath(binaryPath: string | null): void {
  * @returns {string} Informative message.
  */
 function getBinaryFailureMessage(error?: WebServiceExtractionError): string {
-    return error?.message ?? 'PHP binary not found on system. Please install PHP CLI (>= 7.4).';
+    return error?.message ?? 'PHP binary not found on system. Please install PHP CLI (>= 8.0).';
 }
 
 /**
@@ -181,19 +178,10 @@ export async function getPhpBinary(): Promise<string> {
 }
 
 /**
- * Cleans up temporary downloaded PHP runtime if one was provisioned.
+ * Clears the cached PHP binary resolution so the next extraction re-validates the runtime.
  *
  * @returns {Promise<void>}
  */
 export async function cleanupPhpRuntime(): Promise<void> {
     cachedSystemPhpBinary = null;
-    if (temporaryRuntimeDir) {
-        try {
-            await fs.rm(temporaryRuntimeDir, { recursive: true, force: true });
-        } catch {
-            // Ignore cleanup errors
-        }
-        temporaryRuntimeDir = null;
-        customPhpBinary = null;
-    }
 }

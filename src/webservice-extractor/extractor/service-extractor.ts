@@ -1,7 +1,7 @@
 import { Entry, Array as PhpArray, Node } from 'php-parser';
+import { collectArrayVariableEntries } from '../parser/array-variable-collector';
 import { MoodleService } from '../interfaces/service-extractor.interfaces';
 import {
-    findVariableAssignment,
     extractArrayEntriesMap,
     extractEntryKey,
     extractFieldValue,
@@ -237,20 +237,9 @@ function isObjectAST(ast: unknown): boolean {
 }
 
 /**
- * Checks if the extracted functions array has valid iterable items.
- *
- * @param {PhpArray | null} array - PHP Array node to check.
- * @returns {array is PhpArray} True if the array contains items and is not null.
- */
-function isValidFunctionsArray(array: PhpArray | null): array is PhpArray {
-    if (!array) {
-        return false;
-    }
-    return Array.isArray(array.items);
-}
-
-/**
  * Extracts Web Service definitions declared in the $functions array of a services.php AST.
+ * Every statement building `$functions` is honoured (element assignments, `+=`, array_merge,
+ * conditional blocks and unset), mirroring the array Moodle sees after including the file.
  *
  * @example
  * Given Moodle db/services.php file content:
@@ -305,10 +294,5 @@ export function extractServices(ast: unknown): MoodleService[] {
         return [];
     }
 
-    const functionsArray = findVariableAssignment(ast as Node, 'functions');
-    if (!isValidFunctionsArray(functionsArray)) {
-        return [];
-    }
-
-    return collectServices(functionsArray.items);
+    return collectServices(collectArrayVariableEntries(ast as Node, 'functions'));
 }

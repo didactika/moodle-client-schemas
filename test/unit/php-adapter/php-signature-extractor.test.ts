@@ -147,9 +147,10 @@ describe('Unit Test: PHP Signature Extractor Bridge (Phase 3)', () => {
             );
         });
 
-        it('should handle ETIMEDOUT error with a descriptive timeout error message', async () => {
-            const mockError = new Error('timed out') as Error & { code?: string; stderr?: string };
-            mockError.code = 'ETIMEDOUT';
+        it('should report a timeout when execFile kills the process', async () => {
+            const mockError = new Error('Command failed') as Error & { killed?: boolean; signal?: string; stderr?: string };
+            mockError.killed = true;
+            mockError.signal = 'SIGTERM';
             mockError.stderr = '';
 
             (childProcess.execFile as unknown as jest.Mock).mockImplementation(
@@ -161,6 +162,33 @@ describe('Unit Test: PHP Signature Extractor Bridge (Phase 3)', () => {
             await expect(extractWebserviceSignature(validPayload, 2000)).rejects.toThrow(
                 /PHP Signature Extraction failed: Execution timed out/
             );
+        });
+
+        it('should carry the error code reported by the PHP adapter', async () => {
+            const mockError = new Error('Command failed') as Error & { code?: number; stderr?: string };
+            mockError.code = 2;
+            mockError.stderr = JSON.stringify({ success: false, error: 'Class file is not readable (permission denied): /x.php', errorCode: 'PERMISSION_DENIED' });
+            (childProcess.execFile as unknown as jest.Mock).mockImplementation(
+                (_cmd: string, _args: string[], _opts: unknown, callback: (err: Error | null, stdout: string, stderr: string) => void) => {
+                    callback(mockError, '', mockError.stderr ?? '');
+                }
+            );
+
+            await expect(extractWebserviceSignature(validPayload)).rejects.toMatchObject({
+                name: 'SignatureExtractionError',
+                code: 'PERMISSION_DENIED'
+            });
+        });
+
+        it('should map filesystem errnos and default unknown failures to INTROSPECTION_FAILED', async () => {
+            const denied = Object.assign(new Error('spawn php EACCES'), { code: 'EACCES' });
+            const unknown = Object.assign(new Error('Command failed'), { code: 255, stderr: "Class 'x' was not found" });
+            (childProcess.execFile as unknown as jest.Mock)
+                .mockImplementationOnce((_c: string, _a: string[], _o: unknown, cb: (e: Error) => void) => cb(denied))
+                .mockImplementationOnce((_c: string, _a: string[], _o: unknown, cb: (e: Error, out: string, err: string) => void) => cb(unknown, '', unknown.stderr));
+
+            await expect(extractWebserviceSignature(validPayload)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
+            await expect(extractWebserviceSignature(validPayload)).rejects.toMatchObject({ code: 'INTROSPECTION_FAILED' });
         });
 
         it('should format file and line location when available in JSON error payload', async () => {
