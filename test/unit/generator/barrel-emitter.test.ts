@@ -1,7 +1,7 @@
 import { emitBarrelCode } from '../../../src/generator/emitter/barrel-emitter';
 
 describe('Barrel & Declaration Merging Emitter', () => {
-    it('should emit index.ts with re-exports, GeneratedMoodleServices and declare module', () => {
+    it('should emit index.ts with re-exports and GeneratedMoodleServices', () => {
         const services = [
             {
                 name: 'core_course_get_courses',
@@ -38,13 +38,13 @@ describe('Barrel & Declaration Merging Emitter', () => {
         expect(barrelCode).toContain('* Return course details');
         expect(barrelCode).toContain('* @param {CoreCourseGetCoursesParams} [params]');
         expect(barrelCode).toContain('* @param {CoreUserCreateUsersParams} params');
-        expect(barrelCode).toContain("* @param {HttpMethod} [method] - Optional HTTP method override ('GET' | 'POST')");
+        expect(barrelCode).toContain("* @param {HttpMethod} [method] - Optional HTTP method override (defaults to the client's method)");
         expect(barrelCode).toContain('* @returns {Promise<MoodleResponse<CoreCourseGetCoursesReturns>>}');
         expect(barrelCode).toContain('* @returns {Promise<MoodleResponse<CoreUserCreateUsersReturns>>}');
 
-        // Verify Declaration Merging
-        expect(barrelCode).toContain('declare module "@didactika/moodle-client"');
-        expect(barrelCode).toContain('interface MoodleClient extends GeneratedMoodleServices');
+        // No client augmentation unless requested
+        expect(barrelCode).not.toContain('declare module');
+        expect(barrelCode).not.toContain('interface MoodleClient');
     });
 
     it('should support custom importSource', () => {
@@ -59,5 +59,42 @@ describe('Barrel & Declaration Merging Emitter', () => {
 
         const barrelCode = emitBarrelCode(services, { importSource: '../types/http.types' });
         expect(barrelCode).toContain('import type { MoodleResponse, HttpMethod } from "../types/http.types";');
+    });
+
+    it('should not augment any client by default', () => {
+        const code = emitBarrelCode([], { importSource: 'my-moodle-client' });
+        expect(code).not.toContain('declare module');
+        expect(code.endsWith('export interface GeneratedMoodleServices {\n}\n')).toBe(true);
+    });
+
+    it('should not augment any client when augmentClient is false', () => {
+        expect(emitBarrelCode([], { augmentClient: false })).not.toContain('declare module');
+    });
+
+    it('should augment the MoodleClient of the default importSource when augmentClient is true', () => {
+        const code = emitBarrelCode([], { augmentClient: true });
+        expect(code.endsWith('declare module "@didactika/moodle-client" {\n    interface MoodleClient extends GeneratedMoodleServices {}\n}\n')).toBe(true);
+    });
+
+    it('should augment the module named by importSource when augmentClient is true', () => {
+        const code = emitBarrelCode([], { importSource: 'my-moodle-client', augmentClient: true });
+        expect(code).toContain('import type { MoodleResponse, HttpMethod } from "my-moodle-client";');
+        expect(code).toContain('declare module "my-moodle-client" {');
+        expect(code).not.toContain('@didactika/moodle-client');
+    });
+
+    it('should escape comment terminators in service descriptions', () => {
+        const code = emitBarrelCode([
+            {
+                name: 'local_x_run',
+                relativeImportPath: './local/x/run.webservice',
+                hasRequiredParams: false,
+                description: 'Matches mod/*/view.php */ evil',
+                paramsDescription: 'a */ b',
+                returnsDescription: 'c */ d'
+            }
+        ]);
+        expect(code).not.toMatch(/\*\/ (evil|b|d)/);
+        expect(code).toContain('mod/*\\/view.php *\\/ evil');
     });
 });

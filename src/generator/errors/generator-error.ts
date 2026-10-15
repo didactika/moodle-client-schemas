@@ -106,7 +106,7 @@ export function mapExtractionErrorToGeneratorError(
                 code: 'ERR_PHP_NOT_FOUND',
                 title: 'PHP CLI Not Found',
                 details: 'PHP CLI was not found on your system PATH.',
-                action: 'Install PHP 7.4 or higher and ensure the "php" executable is accessible in your system PATH.'
+                action: 'Install PHP 8.0 or higher and ensure the "php" executable is accessible in your system PATH.'
             });
 
         case 'PHP_VERSION_UNSUPPORTED':
@@ -114,7 +114,7 @@ export function mapExtractionErrorToGeneratorError(
                 code: 'ERR_PHP_VERSION_UNSUPPORTED',
                 title: 'Unsupported PHP Version',
                 details: err.message,
-                action: 'Upgrade your PHP CLI installation to PHP 7.4 or higher.'
+                action: 'Upgrade your PHP CLI installation to PHP 8.0 or higher.'
             });
 
         case 'PERMISSION_DENIED':
