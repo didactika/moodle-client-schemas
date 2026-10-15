@@ -19,9 +19,6 @@ export {
     WebServiceSchemaKind
 } from './webservice-extractor/interfaces/signature.interfaces';
 
-// HTTP and response types
-export type { HttpMethod, MoodleResponse } from './types/http.types';
-
 // Code emission & generation
 export {
     generateWebserviceFiles,
@@ -32,15 +29,12 @@ export {
     emitWebserviceCode,
     hasRequiredParameters
 } from './generator/emitter/ts-code-emitter';
-export {
-    emitBarrelCode,
-    BarrelEmitterOptions
-} from './generator/emitter/barrel-emitter';
+export { emitBarrelCode } from './generator/emitter/barrel-emitter';
 export {
     resolveWebserviceFilePath,
     toFullPascalCase
 } from './generator/resolver/path-resolver';
-export type { GeneratedServiceMetadata } from './generator/interfaces/generator.interfaces';
+export type { GeneratedServiceMetadata, BarrelEmitterOptions } from './generator/interfaces/generator.interfaces';
 
 // Generator errors
 export {

@@ -5,6 +5,7 @@ import { generateWebserviceFiles } from '../../../src/generator/generator-pipeli
 import { WebServiceSchema } from '../../../src/webservice-extractor/interfaces/schema-extractor.interfaces';
 
 describe('generateWebserviceFiles', () => {
+    const minimalSchema: WebServiceSchema = { name: 'core_course_get_courses', parameters: null, returns: null };
     let tempDir: string;
     let targetDir: string;
 
@@ -127,7 +128,21 @@ describe('generateWebserviceFiles', () => {
         expect(indexContent).toContain('export interface GeneratedMoodleServices');
         expect(indexContent).toContain('core_course_get_courses(params?: CoreCourseGetCoursesParams');
         expect(indexContent).toContain('core_user_get_users(params: CoreUserGetUsersParams');
-        expect(indexContent).toContain('declare module "@didactika/moodle-client"');
+        expect(indexContent).not.toContain('declare module');
+    });
+
+    it('should pass augmentClient and importSource through to the barrel', async () => {
+        await generateWebserviceFiles([minimalSchema], targetDir, { importSource: '../my-client', augmentClient: true });
+        const indexContent = await fs.readFile(path.join(targetDir, 'index.d.ts'), 'utf-8');
+        expect(indexContent).toContain('import type { MoodleResponse, HttpMethod } from "../my-client";');
+        expect(indexContent).toContain('declare module "../my-client" {');
+    });
+
+    it('should still recognize and clean a previous barrel that has no client augmentation', async () => {
+        await generateWebserviceFiles([minimalSchema], targetDir);
+        await generateWebserviceFiles([], targetDir);
+        const indexContent = await fs.readFile(path.join(targetDir, 'index.d.ts'), 'utf-8');
+        expect(indexContent).not.toContain('core_course_get_courses');
     });
 
     it('should selectively clean targetDir before generating, eliminating stale webservices while preserving user files', async () => {
@@ -157,5 +172,34 @@ describe('generateWebserviceFiles', () => {
 
         // Fresh index.d.ts should be generated
         expect(await fs.access(path.join(targetDir, 'index.d.ts')).then(() => true).catch(() => false)).toBe(true);
+    });
+
+    it('should never delete user index files or user directories outside the generated root barrel', async () => {
+        const userLib = path.join(targetDir, 'mylib');
+        const userEmptyDir = path.join(targetDir, 'drafts');
+        await fs.mkdir(path.join(targetDir, 'core/user'), { recursive: true });
+        await fs.mkdir(userLib, { recursive: true });
+        await fs.mkdir(userEmptyDir, { recursive: true });
+        await fs.writeFile(path.join(userLib, 'index.ts'), 'export const keep = 1;', 'utf-8');
+        await fs.writeFile(path.join(targetDir, 'core/user/index.d.ts'), 'export type Keep = 1;', 'utf-8');
+
+        await generateWebserviceFiles([], targetDir);
+
+        expect(await fs.readFile(path.join(userLib, 'index.ts'), 'utf-8')).toBe('export const keep = 1;');
+        expect(await fs.readFile(path.join(targetDir, 'core/user/index.d.ts'), 'utf-8')).toBe('export type Keep = 1;');
+        expect(await fs.access(userEmptyDir).then(() => true).catch(() => false)).toBe(true);
+    });
+
+    it('should preserve a hand-written root index.ts and only replace generated root barrels', async () => {
+        const rootIndexTs = path.join(targetDir, 'index.ts');
+        const rootIndexDmts = path.join(targetDir, 'index.d.mts');
+        await fs.mkdir(targetDir, { recursive: true });
+        await fs.writeFile(rootIndexTs, 'export * from "./custom";', 'utf-8');
+        await fs.writeFile(rootIndexDmts, 'export interface GeneratedMoodleServices {}', 'utf-8');
+
+        await generateWebserviceFiles([], targetDir);
+
+        expect(await fs.readFile(rootIndexTs, 'utf-8')).toBe('export * from "./custom";');
+        expect(await fs.access(rootIndexDmts).then(() => true).catch(() => false)).toBe(false);
     });
 });

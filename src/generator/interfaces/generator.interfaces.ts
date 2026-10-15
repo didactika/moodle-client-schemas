@@ -39,3 +39,22 @@ export interface GeneratedServiceMetadata {
     /** Optional human-readable description of returns */
     returnsDescription?: string;
 }
+
+/**
+ * Options controlling how the central barrel is emitted.
+ */
+export interface BarrelEmitterOptions {
+    /**
+     * Module the barrel imports `HttpMethod` and `MoodleResponse<T>` from, and the module whose
+     * `MoodleClient` is augmented when `augmentClient` is true (default '@didactika/moodle-client').
+     * A relative path is resolved from the barrel file itself.
+     */
+    importSource?: string;
+    /**
+     * Emit `declare module "<importSource>" { interface MoodleClient extends GeneratedMoodleServices {} }`,
+     * which makes `client.<service>(params)` type-check (default false).
+     * Enable it only when that client answers every service name with a function at runtime;
+     * otherwise the calls compile and then fail with "is not a function".
+     */
+    augmentClient?: boolean;
+}

@@ -1,4 +1,5 @@
 import { toFullPascalCase } from '../resolver/path-resolver';
+import { escapeJsDocText, formatPropertyName } from './jsdoc-utils';
 import {
     WebServiceSchema,
     WebServiceReturnSchema,
@@ -15,7 +16,7 @@ function formatJsDoc(description?: string, indent: string = ''): string {
         return '';
     }
 
-    const lines = description.trim().split('\n');
+    const lines = escapeJsDocText(description.trim()).split('\n');
     if (lines.length === 1) {
         return `${indent}/** ${lines[0]} */\n`;
     }
@@ -79,7 +80,7 @@ function renderTypeNode(schema: WebServiceReturnSchema, indentLevel: number = 1)
                     const isOptional = childSchema.required !== 1;
                     const optMark = isOptional ? '?' : '';
                     const rendered = renderTypeNode(childSchema, indentLevel + 1);
-                    return `${jsdoc}${indent}${propName}${optMark}: ${rendered};`;
+                    return `${jsdoc}${indent}${formatPropertyName(propName)}${optMark}: ${rendered};`;
                 })
                 .join('\n');
 
@@ -127,7 +128,7 @@ export function emitWebserviceCode(schema: WebServiceSchema): string {
                 const isOptional = childSchema.required !== 1;
                 const optMark = isOptional ? '?' : '';
                 const rendered = renderTypeNode(childSchema, 2);
-                return `${jsdoc}    ${propName}${optMark}: ${rendered};`;
+                return `${jsdoc}    ${formatPropertyName(propName)}${optMark}: ${rendered};`;
             })
             .join('\n');
     }
@@ -140,7 +141,8 @@ export function emitWebserviceCode(schema: WebServiceSchema): string {
     // 2. Emit Returns Type / Interface
     const returnsJsDoc = formatJsDoc(schema.returns?.description);
     let returnsDeclaration = '';
-    if (schema.returns && (schema.returns.kind === 'object' || 'keys' in schema.returns)) {
+    // A nullable top-level object cannot be an interface; it falls through to a `type ... | null` alias.
+    if (schema.returns && (schema.returns.kind === 'object' || 'keys' in schema.returns) && !schema.returns.allownull) {
         const objSchema = schema.returns as WebServiceObjectSchema;
         const keys = objSchema.keys || {};
         const entries = Object.entries(keys) as [string, WebServiceReturnSchema][];
@@ -152,7 +154,7 @@ export function emitWebserviceCode(schema: WebServiceSchema): string {
                     const isOptional = childSchema.required !== 1;
                     const optMark = isOptional ? '?' : '';
                     const rendered = renderTypeNode(childSchema, 2);
-                    return `${jsdoc}    ${propName}${optMark}: ${rendered};`;
+                    return `${jsdoc}    ${formatPropertyName(propName)}${optMark}: ${rendered};`;
                 })
                 .join('\n');
             returnsDeclaration = `${returnsJsDoc}export interface ${pascalName}Returns {\n${body}\n}`;
