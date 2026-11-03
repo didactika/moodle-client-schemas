@@ -1,3 +1,5 @@
+const EXTRA_WHITESPACE_REGEX = /\s+/g;
+
 /**
  * Sanitizes and normalizes human-readable description strings:
  * - Replaces newlines (\r\n, \n, \r) and tabs (\t) with single spaces.
@@ -7,7 +9,7 @@
  *
  * @example
  * ```ts
- * sanitizeDescription('List of items.\n   Indented text.');
+ * sanitizeDescription('List of items.\n    Indented text.');
  * // returns 'List of items. Indented text.'
  *
  * sanitizeDescription('   \n\t  ');
@@ -21,9 +23,11 @@ export function sanitizeDescription(desc?: unknown): string | undefined {
     if (typeof desc !== 'string') {
         return undefined;
     }
-    const cleaned = desc
-        .replace(/[\r\n\t]+/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
-    return cleaned.length > 0 ? cleaned : undefined;
+
+    const trimmed = desc.trim();
+    if (trimmed.length === 0) {
+        return undefined;
+    }
+
+    return trimmed.replace(EXTRA_WHITESPACE_REGEX, ' ');
 }
