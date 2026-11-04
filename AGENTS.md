@@ -17,11 +17,12 @@ Orientation for coding agents and contributors. Not published to npm.
    ```
    FLOW -> Integration Test -> Missing Component -> Unit Tests -> Implementation -> Connect to Flow
    ```
-4. **Pure In-Memory Execution.** No persistent caching or files written to disk inside the extraction core. The AST cache and component state reside in memory during execution and are cleared completely via `clearAstCache()` and `cleanupPhpRuntime()` in `finally` blocks. File generation occurs strictly within the caller-specified output directory.
+4. **Never write to the Moodle codebase.** The extraction core treats `moodlePath` as read-only. Scratch data (PHP dataroot, and for Moodle < 4.0 a normalized copy of the codebase) lives in a per-run temporary directory created by `prepareExtractionRuntime()` and removed by `disposeExtractionRuntime()`. In-memory caches are keyed by Moodle root and released only when no other `extractWebservice` call is running. File generation occurs strictly within the caller-specified output directory, and only generated files are ever deleted there.
 5. **No inline interfaces in adapters/classes.** All TypeScript interfaces, payload types, and schema models must live inside `src/webservice-extractor/interfaces/` or `src/generator/interfaces/`.
 6. **Object-Oriented & Single Responsibility.** Each phase (Scanner, AST Parser, ServiceExtractor, ClassResolver, PHP Adapter, Code Emitter, Orchestrator) lives in its own module with clean, transport-agnostic interfaces.
 7. **Every change ships with tests.** Always provide unit tests for isolated classes and integration/flow tests for the pipeline.
 8. **Strictly ZERO emojis.** No emojis in code, comments, CLI output, or documentation.
+9. **Never report guessed signatures as success.** The PHP introspector must use the exact `{methodname}_parameters()` / `{methodname}_returns()` pair of the real class; missing classes or methods, exceptions, and dependencies on JIT-synthesized structures are reported as errors.
 
 ## Library Public API (`src/index.ts`)
 
@@ -33,7 +34,7 @@ export async function extractWebservice(
 ): Promise<ExtractWebserviceResult>;
 ```
 
-- **`ExtractWebserviceOptions`**: Configuration containing `moodlePath: string`, `services?: string[]`, and optional `concurrency?: number`.
+- **`ExtractWebserviceOptions`**: Configuration containing `moodlePath: string`, `services?: string[]`, optional `concurrency?: number` (isolated fallback processes), `timeout?: number` (per-service inactivity, ms) and `progress?: ProgressOption`.
 - **`ExtractWebserviceResult`**: Combined output contract `{ schemas: WebServiceSchema[], errors: WebServiceExtractionError[] }`.
 - **`WebServiceExtractionError`**: Structured diagnostic `{ serviceName?, classname?, classFile?, code?, message, cause? }`.
 - **`WebServiceErrorCode`**: Standardized error code union `'INVALID_MOODLE_PATH' | 'PHP_NOT_FOUND' | 'PHP_VERSION_UNSUPPORTED' | 'SERVICE_NOT_FOUND' | 'CLASS_NOT_FOUND' | 'INTROSPECTION_FAILED' | 'PERMISSION_DENIED'`.
@@ -51,6 +52,7 @@ export async function generateWebserviceFiles(
 
 export function emitWebserviceCode(schema: WebServiceSchema): string;
 export function emitBarrelCode(metadataList: GeneratedServiceMetadata[], options?: BarrelEmitterOptions): string;
+// GenerateWebserviceFilesOptions = BarrelEmitterOptions = { importSource?: string; augmentClient?: boolean }
 export function resolveWebserviceFilePath(serviceName: string): string;
 export function toFullPascalCase(str: string): string;
 export function hasRequiredParameters(schema: WebServiceSchema): boolean;
@@ -66,8 +68,7 @@ export function mapExtractionErrorToGeneratorError(err: { code?: string; message
 
 ### Transport Types
 
-- **`HttpMethod`**: `'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH'`.
-- **`MoodleResponse<T>`**: Generic response envelope `{ data: T, status: number, statusText: string, headers: Record<string, string> }`.
+Not defined here. `HttpMethod` and `MoodleResponse<T>` are imported by the generated barrel from the module given in `importSource` (default `@didactika/moodle-client`), which owns them.
 
 ## Pipeline Architecture
 
@@ -100,43 +101,53 @@ src/
 ├── index.ts                      Main library entrypoint (exports extraction, generation, and types)
 ├── generator/                    TypeScript code emitter and file generation pipeline
 │   ├── emitter/
-│   │   ├── barrel-emitter.ts     Emits central index.ts / index.d.ts barrel
-│   │   └── ts-code-emitter.ts    Emits typed webservice client implementation and declarations
+│   │   ├── barrel-emitter.ts     Emits central index.d.ts barrel; MoodleClient augmentation only with augmentClient
+│   │   ├── jsdoc-utils.ts        Escapes JSDoc text and quotes non-identifier property names
+│   │   └── ts-code-emitter.ts    Emits typed Params/Returns declarations for one webservice
 │   ├── errors/
 │   │   └── generator-error.ts    MoodleGeneratorError class and diagnostic CLI formatters
 │   ├── interfaces/
 │   │   └── generator.interfaces.ts
 │   ├── resolver/
 │   │   └── path-resolver.ts      Resolves output file paths and PascalCase naming
-│   └── generator-pipeline.ts     generateWebserviceFiles orchestrator
+│   └── generator-pipeline.ts     generateWebserviceFiles orchestrator and selective cleanup
 ├── php-adapter/                  Isolated PHP reflection sandbox and mock environment
 │   ├── autoloader/
-│   │   └── jit-autoloader.php    Dynamic JIT classloader resolving Moodle classes without database
+│   │   └── jit-autoloader.php    JIT classloader synthesizing missing Moodle classes, with protect/fallback tracking
 │   ├── bootstrap/
 │   │   ├── headless-bootstrap.php Mocks $CFG, $DB, $PAGE, $USER and defines dummy globals
 │   │   └── syntax-normalizer.php Normalizes PHP 7.x/8.x syntax compatibility
-│   ├── batch-cli-executor.php    Multi-process batch introspection executor
-│   └── cli-executor.php          CLI introspection runner emitting JSON signatures to stdout
+│   ├── introspection/
+│   │   └── signature-introspector.php Strict {method}_parameters/_returns introspection and IntrospectionException codes
+│   ├── batch-cli-executor.php    Streaming NDJSON batch introspection executor
+│   ├── cli-executor.php          Single-service fallback executor emitting JSON to stdout
+│   └── normalize-cli.php         Rewrites the disposable copy of Moodle < 4.0 for PHP 8
 ├── types/
-│   └── http.types.ts             HttpMethod and MoodleResponse transport types
+│   └── moodle-client.d.ts        Ambient forward declaration of @didactika/moodle-client for declaration merging
 └── webservice-extractor/         AST parser, scanner, and headless introspection
     ├── index.ts                  Core orchestrator implementing extractWebservice
     ├── adapter/
-    │   ├── batch-signature-extractor.ts High-concurrency worker batch executor
-    │   ├── php-runtime.ts        Runtime provisioning, execution, and cleanup hooks
-    │   └── php-signature-extractor.ts Child process executor and structured error formatter
+    │   ├── batch-signature-extractor.ts Batch executor with idle watchdog and isolated fallback
+    │   ├── extraction-runtime.ts Per-run temporary dataroot and legacy codebase copy
+    │   ├── php-runtime.ts        PHP detection and version validation
+    │   ├── php-signature-extractor.ts Single-service child process executor
+    │   ├── script-locator.ts     Locates PHP adapter scripts across source and dist builds
+    │   └── signature-extraction-error.ts Error carrying a WebServiceErrorCode
     ├── cache/
     │   └── ast-manager.ts        In-memory execution cache with clearAstCache()
     ├── extractor/
-    │   └── service-extractor.ts  Extracts $functions from AST arrays with version fallbacks
+    │   └── service-extractor.ts  Builds MoodleService entries from $functions
     ├── interfaces/
-    │   ├── ast/
+    │   ├── ast/                  AST parser and tracked-array interfaces
     │   ├── batch.interfaces.ts
     │   ├── component-resolver.interfaces.ts
+    │   ├── runtime.interfaces.ts
+    │   ├── scanner.interfaces.ts
     │   ├── schema-extractor.interfaces.ts
     │   ├── service-extractor.interfaces.ts
     │   └── signature.interfaces.ts
     ├── parser/
+    │   ├── array-variable-collector.ts Statically replays $functions assignments (=, +=, merge, unset, if)
     │   ├── ast-parser.ts         PHP AST parser using php-parser
     │   └── ast-utils.ts          AST node navigation and expression evaluation helpers
     ├── resolver/
@@ -150,12 +161,23 @@ src/
     │       ├── subcomponent-resolver.ts
     │       └── subsystem-resolver.ts
     ├── scanner/
-    │   └── scanner.ts            Fast recursive finder for **/db/services.php
+    │   └── scanner.ts            Symlink-aware recursive finder for **/db/services.php
+    ├── types/
+    │   └── component-resolver.types.ts
     └── utils/
+        ├── concurrency.ts        Bounded concurrency helper (replaces p-limit)
         ├── console-progress.ts   Terminal progress reporting helpers
         ├── description-utils.ts  HTML description sanitization utilities
+        ├── error-code-utils.ts   resolveErrorCode: maps errors to WebServiceErrorCode without reading messages
         ├── type-utils.ts         PARAM_* constant resolution to primitive types
         └── version-utils.ts      Semver normalization and version comparison helpers
+docs/
+├── api-reference.md              Public API, schema format and generated output
+└── errors.md                     WebServiceErrorCode and MoodleGeneratorError catalogue
+examples/                         Runnable usage scripts (import the package by name; not type-checked by npm run typecheck)
+└── 09-custom-client/             generateWebserviceFiles with importSource pointing at a custom client
+scripts/
+└── test-moodle-5.3.mjs           Full extraction against a local Moodle 5.3 checkout (npm run extract:moodle-5.3)
 test/
 ├── fixtures/                     Static fixtures for mock Moodle versions and services
 ├── integration/                  Pipeline integration tests (Live PHP adapter, component flows, E2E)
@@ -172,7 +194,7 @@ npm run typecheck          # Type check entire codebase with tsc --noEmit
 npm run format             # Format source files with Prettier
 npm run test:unit          # Run unit test suites
 npm run test:coverage      # Run test suites with coverage report
-npm test                   # Run full verification (36 unit & integration test suites, 226 tests)
+npm test                   # Run full verification (43 unit & integration test suites, 287 tests)
 ```
 
 ## Gotchas & Rules
@@ -181,3 +203,9 @@ npm test                   # Run full verification (36 unit & integration test s
 - **`core_external` in Moodle 5.x+:** Located at `lib/external/externallib.php` instead of `lib/externallib.php`. Handled in `class-resolver.ts`.
 - **Zero I/O disk pollution during extraction:** Never write output JSON files or AST cache to disk inside the extractor core.
 - **Complexity $\le 3$:** Always extract compound conditional checks into separate helper functions to strictly adhere to cyclomatic complexity $\le 3$.
+- **PHP 8.0+ runtime:** The sandbox scripts rely on PHP 8 functions (`str_starts_with`, `str_contains`, ...). Legacy Moodle (< 4.0) runs on PHP 8 thanks to `normalize-cli.php`, which only ever rewrites the disposable copy.
+- **Shared fixture is read-only:** suites run in parallel Jest workers, so a test that needs to plant or modify files must `fs.cpSync` `test/fixtures/mock_moodle` into an `os.tmpdir()` copy (see `batch-chaos-isolation.test.ts`).
+- **Error codes are structured:** PHP reports `errorCode` (`IntrospectionException::codeOf`) and TypeScript maps errors via `resolveErrorCode` (`utils/error-code-utils.ts`). Never classify failures by matching message text.
+- **Keep docs in sync:** a change to the public API or to an error code updates `docs/api-reference.md` / `docs/errors.md`, and the affected script in `examples/`.
+- **Generated barrels add types, not methods:** the `declare module "<importSource>"` block is opt-in (`augmentClient`, default `false`) because it makes `client.<service>()` type-check whether or not the client implements it at runtime. This library stays independent of any client: do not add consumer-specific barrel shapes or post-processing here. Keep `docs/api-reference.md` and `examples/09-custom-client` in sync with any change to the barrel shape.
+- **No test hooks in production code:** tests that bypass PHP mock `adapter/batch-signature-extractor` (`extractBatchSignatures`) instead of relying on runtime mock detection.

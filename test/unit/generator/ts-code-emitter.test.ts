@@ -123,4 +123,38 @@ describe('TypeScript Code Emitter', () => {
         expect(code).toContain('sitename: string;');
         expect(code).toContain('username: string;');
     });
+
+    it('should quote keys that are not valid identifiers and escape comment terminators', () => {
+        const code = emitWebserviceCode({
+            name: 'local_x_run',
+            description: 'Runs */ things',
+            parameters: {
+                kind: 'parameters',
+                keys: {
+                    'with-dash': { kind: 'value', type: 'text', primitiveType: 'string', required: 1, description: 'Path a/*/b */' },
+                    '1': { kind: 'value', type: 'int', primitiveType: 'number', required: 1 },
+                    plain: { kind: 'value', type: 'int', primitiveType: 'number', required: 0 }
+                }
+            },
+            returns: null
+        });
+        expect(code).toContain('"with-dash": string;');
+        expect(code).toContain('    1: number;');
+        expect(code).toContain('    plain?: number;');
+        expect(code).toContain('Runs *\\/ things');
+        expect(code).not.toMatch(/\*\/ things/);
+    });
+
+    it('should emit a nullable alias for a nullable top-level object return', () => {
+        const code = emitWebserviceCode({
+            name: 'local_x_find',
+            parameters: { kind: 'parameters', keys: {} },
+            returns: {
+                kind: 'object',
+                allownull: true,
+                keys: { id: { kind: 'value', type: 'int', primitiveType: 'number', required: 1 } }
+            }
+        });
+        expect(code).toMatch(/export type LocalXFindReturns = \{[\s\S]*id: number;[\s\S]*\} \| null;/);
+    });
 });

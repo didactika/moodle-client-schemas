@@ -53,12 +53,9 @@ describe('SyntaxNormalizer Unit Tests', () => {
     expect(updatedContent).not.toContain('class object extends stdClass');
   });
 
-  it('should create .php8_normalized marker and be idempotent on subsequent calls', async () => {
+  it('should never write marker files into the target tree', async () => {
     const filePath = path.join(tempDir, 'sample.php');
     fs.writeFileSync(filePath, '<?php\n$val = 1;\n', 'utf8');
-
-    const markerPath = path.join(tempDir, '.php8_normalized');
-    expect(fs.existsSync(markerPath)).toBe(false);
 
     const phpCode = `
       require_once '${NORMALIZER_SCRIPT}';
@@ -66,12 +63,26 @@ describe('SyntaxNormalizer Unit Tests', () => {
     `;
 
     await execFileAsync('php', ['-r', phpCode]);
-
-    expect(fs.existsSync(markerPath)).toBe(true);
-
-    // Subsequent call should execute cleanly without error
     await execFileAsync('php', ['-r', phpCode]);
-    expect(fs.existsSync(markerPath)).toBe(true);
+
+    expect(fs.readdirSync(tempDir).sort()).toEqual(['sample.php']);
+  });
+
+  it('should leave modern Moodle (>= 4.0) codebases untouched', async () => {
+    const legacyLooking = '<?php\n$email = "x";\nif ($email{0} === "x") {}\n';
+    fs.writeFileSync(path.join(tempDir, 'version.php'), '<?php\n$version = 2024100700.00;\n', 'utf8');
+    fs.writeFileSync(path.join(tempDir, 'lib.php'), legacyLooking, 'utf8');
+
+    const phpCode = `
+      require_once '${NORMALIZER_SCRIPT}';
+      echo json_encode(\\Didactika\\MoodleClientSchemas\\Bootstrap\\SyntaxNormalizer::normalize('${tempDir}'));
+    `;
+
+    const { stdout } = await execFileAsync('php', ['-r', phpCode]);
+
+    expect(stdout.trim()).toBe('false');
+    expect(fs.readFileSync(path.join(tempDir, 'lib.php'), 'utf8')).toBe(legacyLooking);
+    expect(fs.readdirSync(tempDir).sort()).toEqual(['lib.php', 'version.php']);
   });
 
   it('should normalize get_level_name and get_context_name method signatures for PHP 8 compatibility', async () => {

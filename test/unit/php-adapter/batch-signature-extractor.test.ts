@@ -47,7 +47,8 @@ describe('Unit Test: batch-signature-extractor.ts TypeScript Adapter', () => {
         expect(sig?.returns).toBeDefined();
 
         expect(result.errors.has('missing_sample_service')).toBe(true);
-        expect(result.errors.get('missing_sample_service')).toContain('Class file not found');
+        expect(result.errors.get('missing_sample_service')?.message).toContain('Class file not found');
+        expect(result.errors.get('missing_sample_service')?.code).toBe('CLASS_NOT_FOUND');
         expect(result.uncompleted.length).toBe(0);
     });
 
@@ -64,7 +65,7 @@ describe('Unit Test: batch-signature-extractor.ts TypeScript Adapter', () => {
         // Extreme timeout of 1ms to force watchdog triggering
         const result = await extractBatchSignatures(items, MOCK_MOODLE, 1);
         expect(result.errors.has('timeout_service')).toBe(true);
-        expect(result.errors.get('timeout_service')).toBe('Execution timed out');
+        expect(result.errors.get('timeout_service')?.message).toContain('Execution timed out');
     });
 
 });

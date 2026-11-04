@@ -28,7 +28,8 @@ register_shutdown_function(function () use (&$executionState) {
         $payload = [
             'success'     => false,
             'serviceName' => $executionState['activeService'],
-            'error'       => $errorMsg
+            'error'       => $errorMsg,
+            'errorCode'   => 'INTROSPECTION_FAILED'
         ];
 
         fwrite(STDERR, json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
@@ -59,10 +60,10 @@ function parse_batch_cli_arguments(array $argv): array {
  * @param string $serviceName Target service identifier.
  * @param bool $success Whether extraction succeeded.
  * @param array|null $signature Extracted signature map.
- * @param string|null $error Descriptive error string if failed.
+ * @param \Throwable|null $failure Exception describing the failure, if any.
  * @return void
  */
-function emit_batch_stream_item(string $serviceName, bool $success, ?array $signature, ?string $error = null): void {
+function emit_batch_stream_item(string $serviceName, bool $success, ?array $signature, ?\Throwable $failure = null): void {
     $payload = [
         'serviceName' => $serviceName,
         'success'     => $success
@@ -70,43 +71,23 @@ function emit_batch_stream_item(string $serviceName, bool $success, ?array $sign
     if ($success) {
         $payload['signature'] = $signature;
     } else {
-        $payload['error'] = $error ?? 'Unknown extraction error';
+        $payload['error'] = $failure ? $failure->getMessage() : 'Unknown extraction error';
+        $payload['errorCode'] = $failure
+            ? \Didactika\MoodleClientSchemas\Introspection\IntrospectionException::codeOf($failure)
+            : 'INTROSPECTION_FAILED';
     }
-    fwrite(STDOUT, json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n");
+    try {
+        $line = \Didactika\MoodleClientSchemas\Introspection\SignatureIntrospector::encodeJson($payload);
+    } catch (\Throwable $e) {
+        $line = json_encode([
+            'serviceName' => $serviceName,
+            'success'     => false,
+            'error'       => 'Failed to encode signature as JSON: ' . $e->getMessage(),
+            'errorCode'   => 'INTROSPECTION_FAILED'
+        ]);
+    }
+    fwrite(STDOUT, $line . "\n");
     fflush(STDOUT);
-}
-
-/**
- * Resolves static method for signature extraction.
- *
- * @param string $className Full class name.
- * @param string $methodName Method name.
- * @param string $type Signature type ('parameters' or 'returns').
- * @return string|null Method name if callable.
- */
-function resolve_signature_method(string $className, string $methodName, string $type): ?string {
-    $primaryCandidate = "{$methodName}_{$type}";
-    if (is_callable([$className, $primaryCandidate])) {
-        return $primaryCandidate;
-    }
-
-    $fallbackCandidate = "execute_{$type}";
-    if (is_callable([$className, $fallbackCandidate])) {
-        return $fallbackCandidate;
-    }
-
-    if (class_exists($className)) {
-        $methods = get_class_methods($className);
-        if (is_array($methods)) {
-            foreach ($methods as $m) {
-                if (str_ends_with(strtolower($m), "_{$type}")) {
-                    return $m;
-                }
-            }
-        }
-    }
-
-    return null;
 }
 
 /**
@@ -155,14 +136,13 @@ if (empty($options['moodle-root'])) {
 $rawMoodleRoot = $options['moodle-root'];
 $moodleRoot    = realpath($rawMoodleRoot) ?: $rawMoodleRoot;
 
-// 2. Headless Bootstrap
-require_once __DIR__ . '/bootstrap/syntax-normalizer.php';
+// 2. Headless Bootstrap (legacy syntax normalization runs beforehand on a disposable copy, see normalize-cli.php)
 require_once __DIR__ . '/bootstrap/headless-bootstrap.php';
 
-\Didactika\MoodleClientSchemas\Bootstrap\SyntaxNormalizer::normalize($moodleRoot);
 \Didactika\MoodleClientSchemas\Bootstrap\HeadlessBootstrap::initialize($moodleRoot);
 
 require_once __DIR__ . '/autoloader/jit-autoloader.php';
+require_once __DIR__ . '/introspection/signature-introspector.php';
 \Didactika\MoodleClientSchemas\Autoloader\JitAutoloader::register();
 \Didactika\MoodleClientSchemas\Autoloader\JitAutoloader::registerShims();
 
@@ -210,52 +190,24 @@ foreach ($items as $item) {
     $method = $item['methodname'] ?? 'execute';
 
     $cleanFile = ltrim($file, '/');
-    $fullPath = resolve_service_filepath($CFG, $moodleRoot, $cleanFile);
-
-    if ($fullPath === null) {
-        emit_batch_stream_item($serviceName, false, null, "Class file not found on disk: {$cleanFile}");
-        continue;
-    }
 
     ob_start();
     try {
+        $fullPath = \Didactika\MoodleClientSchemas\Introspection\SignatureIntrospector::assertLoadableFile(
+            resolve_service_filepath($CFG, $moodleRoot, $cleanFile),
+            $cleanFile
+        );
         require_once $fullPath;
-
-        $cleanClass = '\\' . ltrim($class, '\\');
-
-        $parameters = null;
-        $paramMethod = resolve_signature_method($cleanClass, $method, 'parameters');
-        if ($paramMethod !== null) {
-            try {
-                $parameters = $cleanClass::$paramMethod();
-            } catch (\Throwable $paramErr) {
-                $parameters = null;
-            }
-        }
-
-        $returns = null;
-        $returnMethod = resolve_signature_method($cleanClass, $method, 'returns');
-        if ($returnMethod !== null) {
-            try {
-                $returns = $cleanClass::$returnMethod();
-            } catch (\Throwable $returnErr) {
-                $returns = null;
-            }
-        }
-
-        if (ob_get_level() > 0) {
+        $signature = \Didactika\MoodleClientSchemas\Introspection\SignatureIntrospector::introspect($class, $method);
+        while (ob_get_level() > 0) {
             ob_end_clean();
         }
-
-        emit_batch_stream_item($serviceName, true, [
-            'parameters' => $parameters,
-            'returns'    => $returns
-        ]);
+        emit_batch_stream_item($serviceName, true, $signature);
     } catch (\Throwable $e) {
-        if (ob_get_level() > 0) {
+        while (ob_get_level() > 0) {
             ob_end_clean();
         }
-        emit_batch_stream_item($serviceName, false, null, $e->getMessage());
+        emit_batch_stream_item($serviceName, false, null, $e);
     }
 }
 

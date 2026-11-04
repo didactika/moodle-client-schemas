@@ -87,8 +87,13 @@ export interface ExtractWebserviceOptions {
      * Supports exact service names or wildcard patterns (e.g. 'core_user_*').
      */
     services?: string[];
-    /** Concurrency limit for parallel signature extraction (default: 8) */
+    /** Maximum number of concurrent isolated PHP fallback processes (default: 8) */
     concurrency?: number;
+    /**
+     * Maximum time in milliseconds the PHP sandbox may spend on a single service without progress
+     * (default: 15000). Services left pending after a stall are retried in isolated processes.
+     */
+    timeout?: number;
     /**
      * Enable terminal progress loading card with ETA, or provide a custom progress callback.
      * Set to true to print a live terminal card with progress bar and ETA.

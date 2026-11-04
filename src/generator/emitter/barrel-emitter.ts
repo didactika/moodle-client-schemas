@@ -1,9 +1,8 @@
 import { toFullPascalCase } from '../resolver/path-resolver';
-import { GeneratedServiceMetadata } from '../interfaces/generator.interfaces';
+import { escapeJsDocText } from './jsdoc-utils';
+import { BarrelEmitterOptions, GeneratedServiceMetadata } from '../interfaces/generator.interfaces';
 
-export interface BarrelEmitterOptions {
-    importSource?: string;
-}
+const DEFAULT_IMPORT_SOURCE = '@didactika/moodle-client';
 
 /**
  * Formats a multi-line JSDoc block for a generated webservice method.
@@ -19,7 +18,7 @@ function formatMethodJsDoc(service: GeneratedServiceMetadata, pascalName: string
     if (service.description && service.description.trim().length > 0) {
         const descLines = service.description.trim().split('\n');
         for (const dl of descLines) {
-            docLines.push(`     * ${dl.trim()}`);
+            docLines.push(`     * ${escapeJsDocText(dl.trim())}`);
         }
         docLines.push('     *');
     }
@@ -28,14 +27,14 @@ function formatMethodJsDoc(service: GeneratedServiceMetadata, pascalName: string
         ? `     * @param {${pascalName}Params} params`
         : `     * @param {${pascalName}Params} [params]`;
     const paramDesc = service.paramsDescription && service.paramsDescription.trim().length > 0
-        ? ` - ${service.paramsDescription.replace(/\n/g, ' ').trim()}`
+        ? ` - ${escapeJsDocText(service.paramsDescription.replace(/\n/g, ' ').trim())}`
         : '';
     docLines.push(`${paramTag}${paramDesc}`);
 
-    docLines.push("     * @param {HttpMethod} [method] - Optional HTTP method override ('GET' | 'POST')");
+    docLines.push("     * @param {HttpMethod} [method] - Optional HTTP method override (defaults to the client's method)");
 
     const returnDesc = service.returnsDescription && service.returnsDescription.trim().length > 0
-        ? ` - ${service.returnsDescription.replace(/\n/g, ' ').trim()}`
+        ? ` - ${escapeJsDocText(service.returnsDescription.replace(/\n/g, ' ').trim())}`
         : '';
     docLines.push(`     * @returns {Promise<MoodleResponse<${pascalName}Returns>>}${returnDesc}`);
 
@@ -44,8 +43,24 @@ function formatMethodJsDoc(service: GeneratedServiceMetadata, pascalName: string
 }
 
 /**
- * Emits central barrel file (index.ts) that re-exports all generated webservice types
- * and injects them into MoodleClient via TypeScript declaration merging.
+ * Formats the module augmentation that attaches every generated service to MoodleClient.
+ *
+ * @param {string} importSource - Module whose MoodleClient is augmented
+ * @returns {string[]} Lines of the declare module block
+ */
+function formatClientAugmentation(importSource: string): string[] {
+    return [
+        `declare module "${importSource}" {`,
+        '    interface MoodleClient extends GeneratedMoodleServices {}',
+        '}',
+        ''
+    ];
+}
+
+/**
+ * Emits central barrel file (index.d.ts) that re-exports all generated webservice types and
+ * declares GeneratedMoodleServices. Only when `augmentClient` is true does it also merge those
+ * methods into the MoodleClient of `importSource` via TypeScript declaration merging.
  *
  * @param {GeneratedServiceMetadata[]} services - List of all emitted webservices metadata
  * @param {BarrelEmitterOptions} [options] - Optional configuration for imports
@@ -55,7 +70,7 @@ export function emitBarrelCode(
     services: GeneratedServiceMetadata[],
     options?: BarrelEmitterOptions
 ): string {
-    const importSource = options?.importSource ?? '@didactika/moodle-client';
+    const importSource = options?.importSource ?? DEFAULT_IMPORT_SOURCE;
     const lines: string[] = [];
 
     lines.push(`import type { MoodleResponse, HttpMethod } from "${importSource}";`);
@@ -95,11 +110,10 @@ export function emitBarrelCode(
     lines.push('}');
     lines.push('');
 
-    // 4. Declaration Merging with MoodleClient
-    lines.push('declare module "@didactika/moodle-client" {');
-    lines.push('    interface MoodleClient extends GeneratedMoodleServices {}');
-    lines.push('}');
-    lines.push('');
+    // 4. Opt-in declaration merging with MoodleClient
+    if (options?.augmentClient === true) {
+        lines.push(...formatClientAugmentation(importSource));
+    }
 
     return lines.join('\n');
 }

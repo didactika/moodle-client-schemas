@@ -5,7 +5,6 @@ import {
     WebServiceSchema,
     WebServiceExtractionError,
     ExtractWebserviceResult,
-    WebServiceErrorCode,
     ExtractWebserviceOptions,
     ProgressOption,
     WebServiceProgress
@@ -15,7 +14,8 @@ import {
     ResolvedServiceEntry,
     BatchServiceItem,
     BatchExecutionResult,
-    BatchProgressHandler
+    BatchProgressHandler,
+    ExtractionFailure
 } from './interfaces/batch.interfaces';
 
 import { findFiles } from './scanner/scanner';
@@ -27,9 +27,19 @@ import { clearComponentCache } from './resolver/component-resolver';
 import { sanitizeDescription } from './utils/description-utils';
 import { cleanupPhpRuntime, validatePhpRuntime } from './adapter/php-runtime';
 import { extractBatchSignatures } from './adapter/batch-signature-extractor';
+import { resolveErrorCode } from './utils/error-code-utils';
+import { prepareExtractionRuntime, disposeExtractionRuntime } from './adapter/extraction-runtime';
+import { ExtractionRuntime } from './interfaces/runtime.interfaces';
+import { ServiceCollection } from './interfaces/service-extractor.interfaces';
 import { ConsoleProgressRenderer, calculateEta } from './utils/console-progress';
 
 export { ExtractWebserviceOptions, ProgressOption, WebServiceProgress };
+
+const DEFAULT_SERVICE_TIMEOUT_MS = 15000;
+const DEFAULT_CONCURRENCY = 8;
+
+/** Number of extractWebservice calls currently running in this process (shared caches are cleared only at zero). */
+let activeExtractions = 0;
 
 /**
  * Checks if a service name matches a wildcard prefix filter.
@@ -308,7 +318,7 @@ async function validateMoodleLocation(moodlePath: string): Promise<WebServiceExt
 }
 
 /**
- * Validates that PHP CLI is installed and compatible (PHP >= 7.4).
+ * Validates that PHP CLI is installed and compatible (PHP >= 8.0).
  *
  * @returns {Promise<WebServiceExtractionError | null>} Error object or null if valid.
  */
@@ -324,17 +334,13 @@ async function validatePhpCliEnvironment(): Promise<WebServiceExtractionError | 
 }
 
 /**
- * Classifies an execution error into a standardized error code.
+ * Formats an unknown thrown value as a message string.
  *
- * @param {unknown} err - Error object.
- * @returns {WebServiceErrorCode} Error classification code.
+ * @param {unknown} err - Thrown value.
+ * @returns {string} Message.
  */
-function classifyExecutionError(err: unknown): WebServiceErrorCode {
-    const msg = String(err);
-    if (/(EACCES|EPERM|Permission denied)/i.test(msg)) {
-        return 'PERMISSION_DENIED';
-    }
-    return 'INTROSPECTION_FAILED';
+function toErrorMessage(err: unknown): string {
+    return err instanceof Error ? err.message : String(err);
 }
 
 /**
@@ -348,8 +354,16 @@ async function resolveServiceEntry(
     service: MoodleService,
     moodlePath: string
 ): Promise<ResolvedServiceEntry> {
-    const classFilePath = await resolveClass(service, moodlePath);
-    return { service, classFilePath };
+    try {
+        const classFilePath = await resolveClass(service, moodlePath);
+        return { service, classFilePath };
+    } catch (err) {
+        return {
+            service,
+            classFilePath: null,
+            error: { code: resolveErrorCode(err, 'CLASS_NOT_FOUND'), message: toErrorMessage(err) }
+        };
+    }
 }
 
 /**
@@ -368,20 +382,32 @@ function toBatchItem(entry: ResolvedServiceEntry): BatchServiceItem {
 }
 
 /**
+ * Formats the optional reason suffix of a class resolution failure.
+ *
+ * @param {ExtractionFailure} failure - Resolution failure.
+ * @returns {string} ': reason' or an empty string.
+ */
+function formatReason(failure: ExtractionFailure): string {
+    return failure.message ? `: ${failure.message}` : '';
+}
+
+/**
  * Handles a missing class file entry by appending a CLASS_NOT_FOUND error.
  *
  * @param {MoodleService} service - Target service.
  * @param {WebServiceExtractionError[]} serviceErrors - Errors accumulator.
  */
 function handleMissingClassEntry(
-    service: MoodleService,
+    entry: ResolvedServiceEntry,
     serviceErrors: WebServiceExtractionError[]
 ): void {
+    const failure: ExtractionFailure = entry.error ?? { code: 'CLASS_NOT_FOUND', message: '' };
     serviceErrors.push({
-        serviceName: service.name,
-        classname: service.classname,
-        code: 'CLASS_NOT_FOUND',
-        message: `Could not resolve class file on disk for class '${service.classname}'`
+        serviceName: entry.service.name,
+        classname: entry.service.classname,
+        code: failure.code,
+        message: `Could not resolve class file on disk for class '${entry.service.classname}'${formatReason(failure)}`,
+        cause: failure.message || undefined
     });
 }
 
@@ -416,22 +442,48 @@ function dispatchResolvedEntry(
     serviceMap: Map<string, MoodleService>
 ): void {
     if (!entry.classFilePath) {
-        handleMissingClassEntry(entry.service, serviceErrors);
+        handleMissingClassEntry(entry, serviceErrors);
         return;
     }
     handleValidEntry(entry, batchItems, serviceMap);
 }
 
 /**
- * Collects all declared services from a single db/services.php file.
+ * Builds a structured error for a services.php file that could not be read or parsed.
+ *
+ * @param {string} filePath - Path to services.php file.
+ * @param {unknown} err - Caught error.
+ * @returns {WebServiceExtractionError} Structured error.
+ */
+function createServiceFileError(filePath: string, err: unknown): WebServiceExtractionError {
+    const message = toErrorMessage(err);
+    return {
+        classFile: filePath,
+        code: resolveErrorCode(err),
+        message: `Could not read service definitions from '${filePath}': ${message}`,
+        cause: message
+    };
+}
+
+/**
+ * Collects all declared services from a single db/services.php file into the collection.
  *
  * @param {string} filePath - Path to services.php file.
  * @param {string} moodlePath - Root path of Moodle repository.
- * @returns {Promise<MoodleService[]>} List of declared services.
+ * @param {ServiceCollection} collection - Accumulated services and errors.
+ * @returns {Promise<void>}
  */
-async function collectServicesFromFile(filePath: string, moodlePath: string): Promise<MoodleService[]> {
-    const servicesAst = await getAst(filePath, moodlePath);
-    return extractServices(servicesAst);
+async function collectServicesFromFile(
+    filePath: string,
+    moodlePath: string,
+    collection: ServiceCollection
+): Promise<void> {
+    try {
+        const servicesAst = await getAst(filePath, moodlePath);
+        collection.services.push(...extractServices(servicesAst));
+    } catch (err) {
+        collection.errors.push(createServiceFileError(filePath, err));
+    }
 }
 
 /**
@@ -439,12 +491,14 @@ async function collectServicesFromFile(filePath: string, moodlePath: string): Pr
  *
  * @param {string[]} serviceFiles - Discovered services.php file paths.
  * @param {string} moodlePath - Root path of Moodle repository.
- * @returns {Promise<MoodleService[]>} Flat array of all services.
+ * @returns {Promise<ServiceCollection>} All services and per-file errors.
  */
-async function collectAllServices(serviceFiles: string[], moodlePath: string): Promise<MoodleService[]> {
-    const tasks = serviceFiles.map(file => collectServicesFromFile(file, moodlePath));
-    const results = await Promise.all(tasks);
-    return results.flat();
+async function collectAllServices(serviceFiles: string[], moodlePath: string): Promise<ServiceCollection> {
+    const collection: ServiceCollection = { services: [], errors: [] };
+    for (const file of serviceFiles) {
+        await collectServicesFromFile(file, moodlePath, collection);
+    }
+    return collection;
 }
 
 /**
@@ -479,20 +533,20 @@ function applyBatchSignature(
  * Maps a failed batch extraction item to WebServiceExtractionError list.
  *
  * @param {MoodleService} service - Target service.
- * @param {string} errorMsg - Raw error string.
+ * @param {ExtractionFailure} failure - Classified failure.
  * @param {WebServiceExtractionError[]} serviceErrors - Errors list.
  */
 function applyBatchError(
     service: MoodleService,
-    errorMsg: string,
+    failure: ExtractionFailure,
     serviceErrors: WebServiceExtractionError[]
 ): void {
     serviceErrors.push({
         serviceName: service.name,
         classname: service.classname,
-        code: classifyExecutionError(errorMsg),
-        message: errorMsg,
-        cause: errorMsg
+        code: failure.code,
+        message: failure.message,
+        cause: failure.message
     });
 }
 
@@ -770,6 +824,40 @@ function createProgressHandler(
 }
 
 /**
+ * Runs the PHP sandbox over the queued services and assembles schemas and errors.
+ *
+ * @param {BatchServiceItem[]} batchItems - Queued items.
+ * @param {Map<string, MoodleService>} serviceMap - Service dictionary.
+ * @param {ExtractionRuntime} runtime - Prepared runtime.
+ * @param {ExtractWebserviceOptions} options - User options.
+ * @param {WebServiceExtractionError[]} serviceErrors - Errors accumulator.
+ * @returns {Promise<WebServiceSchema[]>} Extracted schemas.
+ */
+async function introspectQueuedServices(
+    batchItems: BatchServiceItem[],
+    serviceMap: Map<string, MoodleService>,
+    runtime: ExtractionRuntime,
+    options: ExtractWebserviceOptions,
+    serviceErrors: WebServiceExtractionError[]
+): Promise<WebServiceSchema[]> {
+    const progressHandler = createProgressHandler(batchItems.length, options.progress);
+    try {
+        const batchResult = await extractBatchSignatures(
+            batchItems,
+            runtime.moodleRoot,
+            options.timeout ?? DEFAULT_SERVICE_TIMEOUT_MS,
+            progressHandler.onProgress,
+            { dataroot: runtime.dataroot, concurrency: options.concurrency ?? DEFAULT_CONCURRENCY }
+        );
+        const schemas: WebServiceSchema[] = [];
+        collectBatchOutcomes(batchItems, serviceMap, batchResult, schemas, serviceErrors);
+        return schemas;
+    } finally {
+        progressHandler.finish();
+    }
+}
+
+/**
  * Extracts and filters services from discovered services.php files.
  *
  * @param {string[]} serviceFiles - Discovered services.php paths.
@@ -782,32 +870,24 @@ async function extractDiscoveredServices(
     moodlePath: string,
     options: ExtractWebserviceOptions
 ): Promise<ExtractWebserviceResult> {
-    const allServices = await collectAllServices(serviceFiles, moodlePath);
-    const filterErrors = findUnmatchedFilterErrors(options.services, allServices);
-    const filtered = allServices.filter(s => matchesAnyFilter(s.name, options.services));
+    const collection = await collectAllServices(serviceFiles, moodlePath);
+    const filterErrors = findUnmatchedFilterErrors(options.services, collection.services);
+    const filtered = collection.services.filter(s => matchesAnyFilter(s.name, options.services));
 
     const entries = await resolveAllEntries(filtered, moodlePath);
     const batchItems: BatchServiceItem[] = [];
-    const serviceErrors: WebServiceExtractionError[] = [];
+    const serviceErrors: WebServiceExtractionError[] = [...collection.errors];
     const serviceMap = new Map<string, MoodleService>();
 
     populateBatchQueue(entries, batchItems, serviceErrors, serviceMap);
 
-    const progressHandler = createProgressHandler(batchItems.length, options.progress);
+    let runtime: ExtractionRuntime | null = null;
     try {
-        const batchResult = await extractBatchSignatures(
-            batchItems,
-            moodlePath,
-            15000,
-            progressHandler.onProgress
-        );
-        const schemas: WebServiceSchema[] = [];
-
-        collectBatchOutcomes(batchItems, serviceMap, batchResult, schemas, serviceErrors);
-
+        runtime = await prepareExtractionRuntime(moodlePath);
+        const schemas = await introspectQueuedServices(batchItems, serviceMap, runtime, options, serviceErrors);
         return { schemas, errors: [...filterErrors, ...serviceErrors] };
     } finally {
-        progressHandler.finish();
+        await disposeExtractionRuntime(runtime);
     }
 }
 
@@ -827,6 +907,23 @@ function createNoServicesResult(moodlePath: string): ExtractWebserviceResult {
             }
         ]
     };
+}
+
+/**
+ * Releases process-wide caches once no other extraction is running, so concurrent calls never
+ * wipe each other's in-flight state.
+ *
+ * @returns {Promise<void>}
+ */
+async function releaseSharedState(): Promise<void> {
+    activeExtractions -= 1;
+    if (activeExtractions > 0) {
+        return;
+    }
+    clearAstCache();
+    clearVersionCache();
+    clearComponentCache();
+    await cleanupPhpRuntime();
 }
 
 /**
@@ -858,6 +955,7 @@ function createNoServicesResult(moodlePath: string): ExtractWebserviceResult {
 export async function extractWebservice(
     options: ExtractWebserviceOptions
 ): Promise<ExtractWebserviceResult> {
+    activeExtractions += 1;
     try {
         const moodlePath = resolveMoodlePath(options.moodlePath);
 
@@ -873,9 +971,6 @@ export async function extractWebservice(
 
         return await extractDiscoveredServices(serviceFiles, moodlePath, options);
     } finally {
-        clearAstCache();
-        clearVersionCache();
-        clearComponentCache();
-        await cleanupPhpRuntime();
+        await releaseSharedState();
     }
 }

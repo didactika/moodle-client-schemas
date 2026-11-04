@@ -245,7 +245,23 @@ describe('Unit Test: component-resolver (Phase 1 & Phase 2 Orchestration & Versi
             expect(LegacyResolver.resolveLegacyMoodlelibComponents).toHaveBeenCalledTimes(1);
         });
 
-        it('should allow clearing cache for a specific version or completely', async () => {
+        it('should not share registries between different roots of the same version', async () => {
+            const rootA = './moodle/a/4.5';
+            const rootB = './moodle/b/4.5';
+            (VersionResolver.resolveVersion as jest.Mock).mockResolvedValue('4.5.0');
+            (JsonResolver.resolveJsonComponents as jest.Mock)
+                .mockResolvedValueOnce(new Map([['mod', 'mod']]))
+                .mockResolvedValueOnce(new Map([['local', 'local']]));
+
+            const resA = await resolverComponent(rootA);
+            const resB = await resolverComponent(rootB);
+
+            expect(resA).not.toBe(resB);
+            expect(resA.plugintypes.has('local')).toBe(false);
+            expect(resB.plugintypes.get('local')).toBe('local');
+        });
+
+        it('should allow clearing cache for a specific root or completely', async () => {
             const moodlePath = './test/fixtures/component-resolver';
             const mockPlugintypes = new Map([['mod', 'mod']]);
             (VersionResolver.resolveVersion as jest.Mock).mockResolvedValue('4.5.0');
@@ -254,7 +270,7 @@ describe('Unit Test: component-resolver (Phase 1 & Phase 2 Orchestration & Versi
             await resolverComponent(moodlePath);
             expect(JsonResolver.resolveJsonComponents).toHaveBeenCalledTimes(1);
 
-            clearComponentCache('4.5.0');
+            clearComponentCache(moodlePath);
 
             await resolverComponent(moodlePath);
             expect(JsonResolver.resolveJsonComponents).toHaveBeenCalledTimes(2);

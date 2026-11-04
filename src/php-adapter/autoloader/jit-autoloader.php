@@ -7,6 +7,96 @@ namespace Didactika\MoodleClientSchemas\Autoloader;
  * Secondary JIT Autoloader and Bidirectional Namespace Shimming Engine.
  */
 class JitAutoloader {
+    /** @var array<string, bool> Lowercased class names that must never be synthesized. */
+    private static array $protected = [];
+
+    /** @var array<string, bool> Lowercased class names synthesized by this autoloader. */
+    private static array $synthesized = [];
+
+    /** @var string[] Synthetic structure methods invoked since the last reset. */
+    private static array $fallbackUsages = [];
+
+    /**
+     * Prevents a class from being synthesized while it is being resolved.
+     *
+     * @param string $className Class name.
+     * @return void
+     */
+    public static function protect(string $className): void {
+        self::$protected[strtolower(ltrim($className, '\\'))] = true;
+    }
+
+    /**
+     * Removes a class from the protected set.
+     *
+     * @param string $className Class name.
+     * @return void
+     */
+    public static function release(string $className): void {
+        unset(self::$protected[strtolower(ltrim($className, '\\'))]);
+    }
+
+    /**
+     * Checks whether a class is currently protected from synthesis.
+     *
+     * @param string $className Class name.
+     * @return bool True if protected.
+     */
+    public static function isProtected(string $className): bool {
+        return isset(self::$protected[strtolower(ltrim($className, '\\'))]);
+    }
+
+    /**
+     * Checks whether a class was synthesized by this autoloader.
+     *
+     * @param string $className Class name.
+     * @return bool True if synthesized.
+     */
+    public static function isSynthesized(string $className): bool {
+        return isset(self::$synthesized[strtolower(ltrim($className, '\\'))]);
+    }
+
+    /**
+     * Records that a synthetic structure method was used to build a signature.
+     *
+     * @param string $usage Class and method identifier.
+     * @return void
+     */
+    public static function recordFallbackUsage(string $usage): void {
+        self::$fallbackUsages[] = $usage;
+    }
+
+    /**
+     * Returns the synthetic structure methods used since the last reset.
+     *
+     * @return string[] Usage identifiers.
+     */
+    public static function getFallbackUsages(): array {
+        return array_values(array_unique(self::$fallbackUsages));
+    }
+
+    /**
+     * Clears recorded synthetic structure usages.
+     *
+     * @return void
+     */
+    public static function resetFallbackUsages(): void {
+        self::$fallbackUsages = [];
+    }
+
+    /**
+     * Evaluates synthetic type code and records the synthesized class.
+     *
+     * @param string $className Fully qualified class name.
+     * @param string $code PHP code declaring the type.
+     * @return bool Always true.
+     */
+    private static function synthesize(string $className, string $code): bool {
+        @eval($code);
+        self::$synthesized[strtolower($className)] = true;
+        return true;
+    }
+
     /**
      * Registers the secondary fallback autoloader and synthetic type generator.
      *
@@ -24,6 +114,9 @@ class JitAutoloader {
      */
     public static function handleAutoload(string $fallbackClass): bool {
         $cleanClass = ltrim($fallbackClass, '\\');
+        if (self::isProtected($cleanClass)) {
+            return false;
+        }
         $parts      = explode('\\', $cleanClass);
         $shortName  = end($parts);
         $namespace  = count($parts) > 1 ? implode('\\', array_slice($parts, 0, -1)) : '';
@@ -42,8 +135,7 @@ class JitAutoloader {
                 }
             }
             $code = ($namespace !== '' ? "namespace $namespace;\n" : '') . "interface $shortName {}";
-            @eval($code);
-            return true;
+            return self::synthesize($cleanClass, $code);
         }
 
         if ($shortName === 'theme_config') {
@@ -53,8 +145,7 @@ class JitAutoloader {
                 public static function load($theme) { return new self(); }
                 public function __get($name) { return null; }
             }';
-            @eval($code);
-            return true;
+            return self::synthesize($cleanClass, $code);
         }
 
         if ($shortName === 'external_value') {
@@ -64,8 +155,7 @@ class JitAutoloader {
                     $this->type = $type; $this->desc = $desc; $this->required = $required; $this->default = $default; $this->allownull = $allownull;
                 }
             }';
-            @eval($code);
-            return true;
+            return self::synthesize($cleanClass, $code);
         }
 
         if ($shortName === 'external_single_structure' || $shortName === 'external_function_parameters') {
@@ -75,8 +165,7 @@ class JitAutoloader {
                     $this->keys = $keys; $this->desc = $desc; $this->required = $required; $this->default = $default; $this->allownull = $allownull;
                 }
             }';
-            @eval($code);
-            return true;
+            return self::synthesize($cleanClass, $code);
         }
 
         if ($shortName === 'external_multiple_structure' || $shortName === 'external_warnings' || $shortName === 'external_files') {
@@ -86,8 +175,7 @@ class JitAutoloader {
                     $this->content = $content; $this->desc = $desc; $this->required = $required; $this->default = $default; $this->allownull = $allownull;
                 }
             }';
-            @eval($code);
-            return true;
+            return self::synthesize($cleanClass, $code);
         }
 
         if ($shortName === 'external_api') {
@@ -96,8 +184,7 @@ class JitAutoloader {
                 public static function validate_context($context) {}
                 public static function clean_returnvalue($schema, $data) { return $data; }
             }';
-            @eval($code);
-            return true;
+            return self::synthesize($cleanClass, $code);
         }
 
         if ($shortName === 'moodleform') {
@@ -127,8 +214,7 @@ class JitAutoloader {
                 public function get_data() { return null; }
                 public function is_cancelled() { return false; }
             }';
-            @eval($code);
-            return true;
+            return self::synthesize($cleanClass, $code);
         }
 
         if ($shortName === 'core_plugin_manager') {
@@ -150,8 +236,7 @@ class JitAutoloader {
                 public function is_plugin_enabled($component) { return true; }
                 public function __call($name, $args) { return []; }
             }';
-            @eval($code);
-            return true;
+            return self::synthesize($cleanClass, $code);
         }
 
         if (str_starts_with($shortName, 'behat_') || $shortName === 'behat_data_generators' || $shortName === 'behat_util' || $shortName === 'behat_base') {
@@ -161,8 +246,7 @@ class JitAutoloader {
                 public function __call(\$name, \$args) { return []; }
                 public static function __callStatic(\$name, \$args) { return []; }
             }";
-            @eval($code);
-            return true;
+            return self::synthesize($cleanClass, $code);
         }
 
         if ($shortName === 'exporter') {
@@ -183,8 +267,7 @@ class JitAutoloader {
                 }
                 protected static function define_properties() { return []; }
             }';
-            @eval($code);
-            return true;
+            return self::synthesize($cleanClass, $code);
         }
 
         $code = '';
@@ -196,6 +279,7 @@ class JitAutoloader {
             public function __call(\$method, \$args) { return null; }
             public static function __callStatic(\$method, \$args) {
                 if (\$method === 'get_read_structure' || \$method === 'get_create_structure' || \$method === 'get_update_structure' || str_ends_with(\$method, '_structure') || str_ends_with(\$method, '_returns') || \$method === 'execute_returns') {
+                    \\Didactika\\MoodleClientSchemas\\Autoloader\\JitAutoloader::recordFallbackUsage(static::class . '::' . \$method);
                     return (object)['keys' => [], 'desc' => 'Fallback', 'required' => 1];
                 }
                 if (\$method === 'define_properties' || \$method === 'define_other_properties' || \$method === 'define_related' || \$method === 'read_properties_definition') {
@@ -204,8 +288,7 @@ class JitAutoloader {
                 return null;
             }
         }";
-        @eval($code);
-        return true;
+        return self::synthesize($cleanClass, $code);
     }
 
     /**

@@ -1,9 +1,15 @@
 import fs from 'fs/promises';
+import { Dirent, Stats } from 'fs';
 import path from 'path';
+import { ScanContext, ScanEntryKind } from '../interfaces/scanner.interfaces';
 
-const IGNORED_DIRS = [
+/**
+ * Directory names that never hold plugin definitions. 'theme' and 'cache' are deliberately absent:
+ * they are plugin type roots (theme_*, cachestore_*, cachelock_*) whose plugins may declare services.
+ */
+export const DEFAULT_IGNORED_DIRS = [
     'node_modules', 'vendor', '.git', 'tests', 'fixtures',
-    'cache', 'localcache', 'pix', 'theme', 'lang', 'install'
+    'localcache', 'pix', 'lang', 'install'
 ];
 
 /**
@@ -36,9 +42,9 @@ function matchesAnyPattern(targetPath: string, regexes: RegExp[]): boolean {
  * Reads directory entries safely, returning an empty array on error.
  *
  * @param {string} dir - Directory path to read.
- * @returns {Promise<import('fs').Dirent[]>} Array of directory entries.
+ * @returns {Promise<Dirent[]>} Array of directory entries.
  */
-async function readDirectoryEntries(dir: string): Promise<import('fs').Dirent[]> {
+async function readDirectoryEntries(dir: string): Promise<Dirent[]> {
     try {
         return await fs.readdir(dir, { withFileTypes: true });
     } catch {
@@ -78,22 +84,46 @@ async function isNonEmptyFile(fullPath: string): Promise<boolean> {
  * Verifies file match and size, collecting non-empty matching files.
  *
  * @param {string} fullPath - Full file path.
- * @param {string} basePath - Base directory path.
- * @param {RegExp[]} regexes - Match regexes.
- * @param {string[]} collected - Target array.
+ * @param {ScanContext} context - Scan state.
  */
-async function verifyAndCollectFile(
-    fullPath: string,
-    basePath: string,
-    regexes: RegExp[],
-    collected: string[]
-): Promise<void> {
-    if (!isCandidateMatch(fullPath, basePath, regexes)) {
+async function verifyAndCollectFile(fullPath: string, context: ScanContext): Promise<void> {
+    if (!isCandidateMatch(fullPath, context.basePath, context.regexes)) {
         return;
     }
     if (await isNonEmptyFile(fullPath)) {
-        collected.push(fullPath);
+        context.collected.push(fullPath);
     }
+}
+
+/**
+ * Resolves the canonical location of a directory, or null when it cannot be resolved.
+ *
+ * @param {string} dir - Directory path, possibly reached through symlinks.
+ * @returns {Promise<string | null>} Real path or null.
+ */
+async function resolveRealPath(dir: string): Promise<string | null> {
+    try {
+        return await fs.realpath(dir);
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Marks a directory as visited by its real path.
+ * Returns false when it was already walked (symlink cycle or a second link to the same tree).
+ *
+ * @param {string} dir - Directory about to be walked.
+ * @param {ScanContext} context - Scan state.
+ * @returns {Promise<boolean>} True if the directory must be walked.
+ */
+async function claimDirectory(dir: string, context: ScanContext): Promise<boolean> {
+    const realPath = await resolveRealPath(dir);
+    if (!realPath || context.visitedDirs.has(realPath)) {
+        return false;
+    }
+    context.visitedDirs.add(realPath);
+    return true;
 }
 
 /**
@@ -101,91 +131,117 @@ async function verifyAndCollectFile(
  *
  * @param {string} fullPath - Directory path.
  * @param {string} entryName - Directory name.
- * @param {string} basePath - Base scan path.
- * @param {RegExp[]} regexes - Patterns.
- * @param {Set<string>} ignoredSet - Ignored directories.
- * @param {string[]} collected - Results.
+ * @param {ScanContext} context - Scan state.
  */
-async function processDirEntry(
-    fullPath: string,
-    entryName: string,
-    basePath: string,
-    regexes: RegExp[],
-    ignoredSet: Set<string>,
-    collected: string[]
-): Promise<void> {
-    if (!ignoredSet.has(entryName)) {
-        await scanDirectory(fullPath, basePath, regexes, ignoredSet, collected);
+async function processDirEntry(fullPath: string, entryName: string, context: ScanContext): Promise<void> {
+    if (!context.ignoredSet.has(entryName)) {
+        await scanDirectory(fullPath, context);
     }
 }
 
 /**
- * Dispatches file or directory processing for a single Dirent.
+ * Reads the target type of a symbolic link, or null when the link is dangling.
  *
- * @param {import('fs').Dirent} entry - Dirent entry.
- * @param {string} currentDir - Current directory.
- * @param {string} basePath - Base scan path.
- * @param {RegExp[]} regexes - Patterns.
- * @param {Set<string>} ignoredSet - Ignored directory names.
- * @param {string[]} collected - Collected paths.
+ * @param {string} fullPath - Symlink path.
+ * @returns {Promise<Stats | null>} Target stats or null.
  */
-async function processEntry(
-    entry: import('fs').Dirent,
-    currentDir: string,
-    basePath: string,
-    regexes: RegExp[],
-    ignoredSet: Set<string>,
-    collected: string[]
-): Promise<void> {
-    const fullPath = path.join(currentDir, entry.name);
-    if (entry.isDirectory()) {
-        await processDirEntry(fullPath, entry.name, basePath, regexes, ignoredSet, collected);
-    } else if (entry.isFile()) {
-        await verifyAndCollectFile(fullPath, basePath, regexes, collected);
+async function statLinkTarget(fullPath: string): Promise<Stats | null> {
+    try {
+        return await fs.stat(fullPath);
+    } catch {
+        return null;
     }
+}
+
+/**
+ * Classifies filesystem stats as a directory, a regular file, or something else.
+ *
+ * @param {Pick<Stats, 'isDirectory' | 'isFile'>} stats - Dirent or Stats object.
+ * @returns {ScanEntryKind} Entry kind.
+ */
+function classifyStats(stats: Pick<Stats, 'isDirectory' | 'isFile'>): ScanEntryKind {
+    if (stats.isDirectory()) {
+        return 'directory';
+    }
+    return stats.isFile() ? 'file' : 'other';
+}
+
+/**
+ * Resolves what an entry points to, following symbolic links
+ * (e.g. a plugin symlinked from a development checkout). Dangling links resolve to 'other'.
+ *
+ * @param {Dirent} entry - Dirent entry.
+ * @param {string} fullPath - Entry path.
+ * @returns {Promise<ScanEntryKind>} Entry kind.
+ */
+async function resolveEntryKind(entry: Dirent, fullPath: string): Promise<ScanEntryKind> {
+    if (!entry.isSymbolicLink()) {
+        return classifyStats(entry);
+    }
+    const target = await statLinkTarget(fullPath);
+    return target ? classifyStats(target) : 'other';
+}
+
+const ENTRY_HANDLERS: Record<ScanEntryKind, (fullPath: string, entryName: string, context: ScanContext) => Promise<void>> = {
+    directory: processDirEntry,
+    file: (fullPath, _entryName, context) => verifyAndCollectFile(fullPath, context),
+    other: async () => undefined
+};
+
+/**
+ * Dispatches file or directory processing for a single Dirent, following symbolic links.
+ *
+ * @param {Dirent} entry - Dirent entry.
+ * @param {string} currentDir - Current directory.
+ * @param {ScanContext} context - Scan state.
+ */
+async function processEntry(entry: Dirent, currentDir: string, context: ScanContext): Promise<void> {
+    const fullPath = path.join(currentDir, entry.name);
+    const kind = await resolveEntryKind(entry, fullPath);
+    await ENTRY_HANDLERS[kind](fullPath, entry.name, context);
 }
 
 /**
  * Recursively scans directory and collects matching non-empty file paths.
+ * Each directory is walked once by real path, so symlink cycles terminate.
  *
  * @param {string} currentDir - Current directory path.
- * @param {string} basePath - Base root scan path.
- * @param {RegExp[]} regexes - Compiled matching patterns.
- * @param {Set<string>} ignoredSet - Set of directory names to prune.
- * @param {string[]} collected - Output list.
+ * @param {ScanContext} context - Scan state.
  */
-async function scanDirectory(
-    currentDir: string,
-    basePath: string,
-    regexes: RegExp[],
-    ignoredSet: Set<string>,
-    collected: string[]
-): Promise<void> {
+async function scanDirectory(currentDir: string, context: ScanContext): Promise<void> {
+    if (!(await claimDirectory(currentDir, context))) {
+        return;
+    }
     const entries = await readDirectoryEntries(currentDir);
     for (const entry of entries) {
-        await processEntry(entry, currentDir, basePath, regexes, ignoredSet, collected);
+        await processEntry(entry, currentDir, context);
     }
 }
 
 /**
  * Scans for non-empty files in filesystem matching path pattern while ignoring specified directories.
+ * Symbolic links are followed (with cycle protection) and results keep their path under basePath.
  * Pure cross-platform Node.js implementation compatible with Windows, macOS, Linux, and WSL2.
  *
  * @param {string} basePath - Base directory path to scan.
  * @param {string[]} pathPatterns - Array of path patterns.
- * @param {string[]} [ignoredDirs=IGNORED_DIRS] - Directories to prune from search.
+ * @param {string[]} [ignoredDirs=DEFAULT_IGNORED_DIRS] - Directories to prune from search.
  * @returns {Promise<string[]>} List of discovered file paths.
  */
 export async function findFiles(
     basePath: string,
     pathPatterns: string[],
-    ignoredDirs: string[] = IGNORED_DIRS
+    ignoredDirs: string[] = DEFAULT_IGNORED_DIRS
 ): Promise<string[]> {
-    const regexes = pathPatterns.map(patternToRegex);
-    const ignoredSet = new Set(ignoredDirs);
-    const collected: string[] = [];
-    await scanDirectory(basePath, basePath, regexes, ignoredSet, collected);
-    return collected;
+    const context: ScanContext = {
+        basePath,
+        regexes: pathPatterns.map(patternToRegex),
+        ignoredSet: new Set(ignoredDirs),
+        visitedDirs: new Set<string>(),
+        collected: []
+    };
+    await scanDirectory(basePath, context);
+    return context.collected;
 }
 
 /**
